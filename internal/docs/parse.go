@@ -52,13 +52,16 @@ func parseItem(id string, item *RustdocItem, crate *RustdocCrate) *ParsedItem {
 
 	name := *item.Name
 
-	// Resolve full path and kind from the paths map
-	path := name
-	kind := innerKind(item.Inner)
-	if summary, ok := crate.Paths[id]; ok {
-		path = strings.Join(summary.Path, "::")
-		kind = summary.Kind
+	// Only index items with crate.Paths entries — these are top-level public items.
+	// Items without paths are nested (impl methods, fields, variants) and are
+	// accessed through their parent's fragments, not as standalone items.
+	summary, ok := crate.Paths[id]
+	if !ok {
+		return nil
 	}
+
+	path := strings.Join(summary.Path, "::")
+	kind := summary.Kind
 
 	// Skip impl blocks — they don't have meaningful standalone docs
 	if kind == "impl" {

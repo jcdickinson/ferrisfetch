@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 
 	"github.com/jcdickinson/ferrisfetch/internal/cas"
 	"github.com/jcdickinson/ferrisfetch/internal/db"
@@ -30,14 +29,7 @@ func NewSearcher(database *db.DB, voyage *embeddings.VoyageClient, model, rerank
 	return &Searcher{db: database, voyage: voyage, model: model, rerankModel: rerankModel}
 }
 
-const (
-	defaultDecay          = 0.3
-	backlinkMinSimilarity = 0.3
-	bfsMaxDepth           = 3
-	bfsMaxQueueSize       = 500
-)
-
-// Search performs vector search with backlink traversal and reranking.
+// Search performs vector search with reranking.
 // Operates on content hashes to deduplicate across crate versions.
 func (s *Searcher) Search(query string, crateNames []string, threshold float32, limit int, rerankInstruction string) ([]rpc.DocResult, error) {
 	log.Printf("search: query=%q threshold=%.2f limit=%d crates=%v model=%s", query, threshold, limit, crateNames, s.model)
@@ -57,93 +49,24 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 		log.Printf("search: resolved crate names %v -> IDs %v", crateNames, crateIDs)
 	}
 
-	directResults, err := s.db.VectorSearch(queryEmb, threshold, limit*3, crateIDs)
+	candidates, err := s.db.VectorSearch(queryEmb, threshold, limit*3, crateIDs)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	log.Printf("search: vector search returned %d direct results", len(directResults))
-
-	// Build candidate set: content_hash -> best score
-	candidates := make(map[string]float32)
-	for _, r := range directResults {
-		candidates[r.ContentHash] = r.Similarity
-	}
-
-	// BFS through backlinks with dampened propagation
-	visited := make(map[string]bool)
-	type bfsEntry struct {
-		contentHash string
-		score       float32
-		depth       int
-	}
-
-	var queue []bfsEntry
-	for _, r := range directResults {
-		queue = append(queue, bfsEntry{contentHash: r.ContentHash, score: r.Similarity, depth: 0})
-		visited[r.ContentHash] = true
-	}
-
-	for len(queue) > 0 {
-		entry := queue[0]
-		queue = queue[1:]
-
-		if entry.depth >= bfsMaxDepth {
-			continue
-		}
-
-		backlinks, err := s.db.GetBacklinks(entry.contentHash, backlinkMinSimilarity)
-		if err != nil {
-			log.Printf("search: GetBacklinks failed for %s: %v", entry.contentHash, err)
-			continue
-		}
-
-		for _, bl := range backlinks {
-			propagated := entry.score * (defaultDecay + (1-defaultDecay)*bl.Similarity)
-			if propagated <= threshold {
-				continue
-			}
-
-			if existing, ok := candidates[bl.ContentHash]; !ok || propagated > existing {
-				candidates[bl.ContentHash] = propagated
-			}
-
-			if !visited[bl.ContentHash] && len(queue) < bfsMaxQueueSize {
-				visited[bl.ContentHash] = true
-				queue = append(queue, bfsEntry{contentHash: bl.ContentHash, score: propagated, depth: entry.depth + 1})
-			}
-		}
-	}
-
-	log.Printf("search: after BFS, %d total candidates", len(candidates))
-
-	type candidate struct {
-		contentHash string
-		score       float32
-	}
-	var sorted []candidate
-	for hash, score := range candidates {
-		sorted = append(sorted, candidate{hash, score})
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].score > sorted[j].score })
-
-	if len(sorted) > limit*3 {
-		sorted = sorted[:limit*3]
-	}
-
-	log.Printf("search: %d candidates after sorting/truncation", len(sorted))
-	if len(sorted) == 0 {
+	log.Printf("search: vector search returned %d candidates", len(candidates))
+	if len(candidates) == 0 {
 		return nil, nil
 	}
 
-	// Resolve representative items, filtering out nil results
+	// Resolve representative items for each candidate.
 	type resolvedItem struct {
 		item  *db.Item
-		score float32 // original candidate score
+		score float32
 	}
 	var resolved []resolvedItem
 	var documents []string
-	for _, c := range sorted {
-		item, err := s.db.GetItemForHash(c.contentHash, crateIDs)
+	for _, c := range candidates {
+		item, err := s.db.GetItemForHash(c.ContentHash, crateIDs)
 		if err != nil || item == nil {
 			continue
 		}
@@ -151,14 +74,14 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 		if item.Signature != "" {
 			doc += "\n" + item.Signature
 		}
-		if docsText, err := cas.Read(c.contentHash); err == nil {
+		if docsText, err := cas.Read(c.ContentHash); err == nil {
 			d := docsText
 			if len(d) > 500 {
 				d = d[:500]
 			}
 			doc += "\n" + d
 		}
-		resolved = append(resolved, resolvedItem{item: item, score: c.score})
+		resolved = append(resolved, resolvedItem{item: item, score: c.Similarity})
 		documents = append(documents, doc)
 	}
 
@@ -166,7 +89,7 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 		return nil, nil
 	}
 
-	// Batch-fetch crates for all resolved items
+	// Batch-fetch crates for all resolved items.
 	itemIDs := make([]int, len(resolved))
 	for i, r := range resolved {
 		itemIDs[i] = r.item.ID

@@ -18,38 +18,30 @@ func testDB(t *testing.T) *DB {
 	return db
 }
 
-func TestFormatEmbedding(t *testing.T) {
+func TestValidateEmbedding(t *testing.T) {
 	t.Parallel()
 
 	t.Run("valid", func(t *testing.T) {
-		s, err := formatEmbedding([]float32{0.1, 0.2, 0.3})
-		if err != nil {
+		if err := validateEmbedding([]float32{0.1, 0.2, 0.3}); err != nil {
 			t.Fatal(err)
-		}
-		if s != "[0.1,0.2,0.3]" {
-			t.Errorf("got %q", s)
 		}
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		s, err := formatEmbedding([]float32{})
-		if err != nil {
+		if err := validateEmbedding([]float32{}); err != nil {
 			t.Fatal(err)
-		}
-		if s != "[]" {
-			t.Errorf("got %q", s)
 		}
 	})
 
 	t.Run("NaN", func(t *testing.T) {
-		_, err := formatEmbedding([]float32{1.0, float32(math.NaN()), 3.0})
+		err := validateEmbedding([]float32{1.0, float32(math.NaN()), 3.0})
 		if err == nil {
 			t.Fatal("expected error for NaN")
 		}
 	})
 
 	t.Run("Inf", func(t *testing.T) {
-		_, err := formatEmbedding([]float32{float32(math.Inf(1))})
+		err := validateEmbedding([]float32{float32(math.Inf(1))})
 		if err == nil {
 			t.Fatal("expected error for Inf")
 		}
@@ -154,44 +146,6 @@ func TestVectorSearch(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Errorf("limit=1 but got %d results", len(results))
-	}
-}
-
-func TestFindSimilarContent(t *testing.T) {
-	db := testDB(t)
-
-	emb := make([]float32, 1024)
-	for i := range emb {
-		emb[i] = 1.0
-	}
-	similar := make([]float32, 1024)
-	for i := range similar {
-		similar[i] = 0.9
-	}
-
-	if err := db.InsertEmbedding("target", "text", 0, emb); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.InsertEmbedding("similar", "text", 0, similar); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := db.FindSimilarContent(emb, 0.0, 10, "target")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Should exclude "target" itself
-	for _, r := range results {
-		if r.ContentHash == "target" {
-			t.Error("should exclude the target hash")
-		}
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least 'similar' in results")
-	}
-	if results[0].ContentHash != "similar" {
-		t.Errorf("expected 'similar', got %s", results[0].ContentHash)
 	}
 }
 

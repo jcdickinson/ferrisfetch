@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jcdickinson/ferrisfetch/internal/cas"
@@ -44,6 +45,7 @@ type Server struct {
 	mu         sync.Mutex
 	expTimer   *time.Timer
 	expiration time.Duration
+	activeOps  atomic.Int64
 
 	versionCache   map[string]versionCacheEntry
 	versionCacheMu sync.RWMutex
@@ -141,6 +143,11 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 func (s *Server) expire() {
+	if n := s.activeOps.Load(); n > 0 {
+		log.Printf("daemon: expiration deferred, %d ops in progress", n)
+		s.resetExpiration()
+		return
+	}
 	log.Printf("daemon: expiring due to inactivity")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -159,7 +166,11 @@ func (s *Server) resetExpiration() {
 
 func (s *Server) withExpReset(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s.resetExpiration()
+		s.activeOps.Add(1)
+		defer func() {
+			s.activeOps.Add(-1)
+			s.resetExpiration()
+		}()
 		handler(w, r)
 	}
 }
@@ -355,7 +366,7 @@ func (s *Server) addCrateWork(name, version string, progress func(string)) rpc.C
 		return result
 	}
 
-	if err := s.embedAndBacklink(toEmbed, name, realVersion, progress); err != nil {
+	if err := s.embedItems(toEmbed, name, realVersion, progress); err != nil {
 		result.Error = err.Error()
 		return result
 	}
@@ -486,8 +497,8 @@ func (s *Server) indexItems(crate *db.Crate, rustdocCrate *docs.RustdocCrate, it
 	return toEmbed, nil
 }
 
-// embedAndBacklink chunks, deduplicates, embeds, and generates backlinks.
-func (s *Server) embedAndBacklink(toEmbed []embeddable, name, version string, progress func(string)) error {
+// embedItems chunks, deduplicates, and embeds document content.
+func (s *Server) embedItems(toEmbed []embeddable, name, version string, progress func(string)) error {
 	model := s.cfg.VoyageAI.Model
 	if model == "" {
 		model = "voyage-3.5"
@@ -550,7 +561,9 @@ func (s *Server) embedAndBacklink(toEmbed []embeddable, name, version string, pr
 	}
 
 	progress(fmt.Sprintf("embedding %d chunks for %s@%s", len(allTexts), name, version))
-	allEmbeddings, err := s.batchEmbedder.EmbedAll(allTexts, model)
+	allEmbeddings, err := s.batchEmbedder.EmbedAll(allTexts, model, func(done, total int) {
+		progress(fmt.Sprintf("embedded %d/%d chunks for %s@%s", done, total, name, version))
+	})
 	if err != nil {
 		return fmt.Errorf("embedding: %w", err)
 	}
@@ -562,30 +575,7 @@ func (s *Server) embedAndBacklink(toEmbed []embeddable, name, version string, pr
 		}
 	}
 
-	progress(fmt.Sprintf("generating backlinks for %s@%s", name, version))
-	seen := make(map[string]bool)
-	for j, emb := range allEmbeddings {
-		meta := metas[j]
-		// Only use chunk 0 (the summary/first section) for backlinks — it's the most
-		// representative of the item's overall semantics, avoiding noisy sub-section matches.
-		if meta.chunkIndex != 0 || seen[meta.contentHash] {
-			continue
-		}
-		seen[meta.contentHash] = true
-
-		similar, err := s.db.FindSimilarContent(emb, 0.5, 20, meta.contentHash)
-		if err != nil {
-			log.Printf("daemon: backlink search failed for hash %s: %v", meta.contentHash, err)
-			continue
-		}
-
-		for _, sim := range similar {
-			if err := s.db.UpsertBacklink(meta.contentHash, sim.ContentHash, sim.Similarity); err != nil {
-				log.Printf("daemon: failed to store backlink: %v", err)
-			}
-		}
-	}
-
+	s.db.SaveHNSW()
 	return nil
 }
 
@@ -601,6 +591,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Limit <= 0 {
 		req.Limit = 20
+	}
+
+	// Auto-fetch any requested crates that aren't indexed yet.
+	if len(req.Crates) > 0 {
+		indexed, err := s.db.GetIndexedVersions(req.Crates)
+		if err != nil {
+			log.Printf("search: failed to check indexed versions: %v", err)
+		} else {
+			for _, name := range req.Crates {
+				if _, ok := indexed[name]; !ok {
+					log.Printf("search: auto-fetching unindexed crate %s", name)
+					result := s.addCrate(rpc.CrateSpec{Name: name}, func(msg string) {
+						log.Printf("auto-fetch: %s", msg)
+					})
+					if result.Error != "" {
+						log.Printf("search: auto-fetch of %s failed: %s", name, result.Error)
+					}
+				}
+			}
+		}
 	}
 
 	results, err := s.searcher.Search(req.Query, req.Crates, req.Threshold, req.Limit, req.RerankInstruction)

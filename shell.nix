@@ -21,5 +21,6 @@ in
       gomod2nix
       gopls
       just
+      sqlite.dev
     ];
   }

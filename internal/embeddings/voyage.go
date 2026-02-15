@@ -117,7 +117,7 @@ func NewBatchEmbedder(client *VoyageClient, batchSize int, delay time.Duration) 
 	return &BatchEmbedder{client: client, batchSize: batchSize, delay: delay}
 }
 
-func (b *BatchEmbedder) EmbedAll(texts []string, model string) ([][]float32, error) {
+func (b *BatchEmbedder) EmbedAll(texts []string, model string, progress func(done, total int)) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, fmt.Errorf("no texts provided")
 	}
@@ -136,6 +136,10 @@ func (b *BatchEmbedder) EmbedAll(texts []string, model string) ([][]float32, err
 		}
 
 		all = append(all, embeddings...)
+
+		if progress != nil {
+			progress(end, len(texts))
+		}
 
 		if end < len(texts) {
 			time.Sleep(b.delay)

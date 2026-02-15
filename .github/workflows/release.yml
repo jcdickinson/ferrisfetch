@@ -17,34 +17,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            archive: tar.gz
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
 
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-        run: |
-          go build -ldflags="-s -w" -o ferrisfetch ./cmd/ferrisfetch
+        run: nix build .#default
 
       - name: Create archive
         run: |
-          archive_name="ferrisfetch-${{ github.event.release.tag_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          tar -czf "${archive_name}.tar.gz" ferrisfetch README.md LICENSE
+          archive_name="ferrisfetch-${{ github.event.release.tag_name }}-linux-amd64"
+          tar -czf "${archive_name}.tar.gz" -C result/bin ferrisfetch -C ${{ github.workspace }} README.md LICENSE
           echo "ASSET=${archive_name}.tar.gz" >> $GITHUB_ENV
 
       - name: Upload release asset

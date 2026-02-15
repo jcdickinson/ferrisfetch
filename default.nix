@@ -21,4 +21,7 @@ buildGoApplication {
   pwd = ./.;
   src = ./.;
   modules = ./gomod2nix.toml;
+  CGO_ENABLED = 1;
+  CGO_CFLAGS = "-I${pkgs.sqlite.dev}/include";
+  CGO_LDFLAGS = "-L${pkgs.sqlite.out}/lib";
 }

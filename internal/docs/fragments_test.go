@@ -51,7 +51,7 @@ func TestGenerateFragments_Struct(t *testing.T) {
 			}
 		case FragImplementations:
 			foundImpls = true
-			if !strings.Contains(f.Content, "`len`") {
+			if !strings.Contains(f.Content, "`fn len()`") {
 				t.Errorf("implementations fragment missing method: %s", f.Content)
 			}
 		}
@@ -132,6 +132,91 @@ func TestGenerateFragments_Trait(t *testing.T) {
 	}
 	if !names[FragImplementors] {
 		t.Error("expected implementors fragment")
+	}
+}
+
+func TestGenerateFragments_TypesUsed(t *testing.T) {
+	t.Parallel()
+
+	// Struct with an impl block whose method references resolvable types in params and return.
+	items := map[string]RustdocItem{
+		// Method: fn get(&self, key: Key) -> Value
+		"3": {ID: 3, Name: strPtr("get"),
+			Inner: json.RawMessage(`{"function":{"sig":{"inputs":[["self",{"borrowed_ref":{"type":{"generic":"Self"}}}],["key",{"resolved_path":{"name":"Key","id":50}}]],"output":{"resolved_path":{"name":"Value","id":51}}},"generics":{"params":[]},"header":{}}}`)},
+		// Impl block
+		"10": {ID: 10, Inner: json.RawMessage(`{"impl":{"trait":null,"for":null,"items":[3]}}`)},
+	}
+	crate := makeCrateWithItems(items)
+	crate.Paths["50"] = RustdocSummary{CrateID: 0, Path: []string{"mycrate", "Key"}, Kind: "struct"}
+	crate.Paths["51"] = RustdocSummary{CrateID: 0, Path: []string{"mycrate", "Value"}, Kind: "struct"}
+
+	item := &RustdocItem{
+		ID:    0,
+		Name:  strPtr("MyMap"),
+		Inner: json.RawMessage(`{"struct":{"kind":{"plain":{"fields":[]}},"impls":[10]}}`),
+	}
+
+	fragments := GenerateFragments(item, crate, "mycrate", "1.0.0")
+
+	var implFrag *Fragment
+	for i := range fragments {
+		if fragments[i].Name == FragImplementations {
+			implFrag = &fragments[i]
+		}
+	}
+	if implFrag == nil {
+		t.Fatal("expected implementations fragment")
+	}
+
+	if !strings.Contains(implFrag.Content, "## Types Used") {
+		t.Errorf("expected Types Used section, got:\n%s", implFrag.Content)
+	}
+	if !strings.Contains(implFrag.Content, "rsdoc://mycrate/1.0.0/mycrate::Key") {
+		t.Errorf("expected Key URI in Types Used, got:\n%s", implFrag.Content)
+	}
+	if !strings.Contains(implFrag.Content, "rsdoc://mycrate/1.0.0/mycrate::Value") {
+		t.Errorf("expected Value URI in Types Used, got:\n%s", implFrag.Content)
+	}
+}
+
+func TestGenerateFragments_TraitTypesUsed(t *testing.T) {
+	t.Parallel()
+
+	items := map[string]RustdocItem{
+		// Required method: fn process(&self, input: Input) -> Output
+		"1": {ID: 1, Name: strPtr("process"),
+			Inner: json.RawMessage(`{"function":{"has_body":false,"sig":{"inputs":[["self",{"borrowed_ref":{"type":{"generic":"Self"}}}],["input",{"resolved_path":{"name":"Input","id":60}}]],"output":{"resolved_path":{"name":"Output","id":61}}},"generics":{"params":[]},"header":{}}}`)},
+	}
+	crate := makeCrateWithItems(items)
+	crate.Paths["60"] = RustdocSummary{CrateID: 0, Path: []string{"mycrate", "Input"}, Kind: "struct"}
+	crate.Paths["61"] = RustdocSummary{CrateID: 0, Path: []string{"mycrate", "Output"}, Kind: "struct"}
+
+	item := &RustdocItem{
+		ID:    0,
+		Name:  strPtr("Processor"),
+		Inner: json.RawMessage(`{"trait":{"items":[1],"implementations":[],"impls":[]}}`),
+	}
+
+	fragments := GenerateFragments(item, crate, "mycrate", "1.0.0")
+
+	var reqFrag *Fragment
+	for i := range fragments {
+		if fragments[i].Name == FragRequiredMethods {
+			reqFrag = &fragments[i]
+		}
+	}
+	if reqFrag == nil {
+		t.Fatal("expected required-methods fragment")
+	}
+
+	if !strings.Contains(reqFrag.Content, "## Types Used") {
+		t.Errorf("expected Types Used section, got:\n%s", reqFrag.Content)
+	}
+	if !strings.Contains(reqFrag.Content, "rsdoc://mycrate/1.0.0/mycrate::Input") {
+		t.Errorf("expected Input URI in Types Used, got:\n%s", reqFrag.Content)
+	}
+	if !strings.Contains(reqFrag.Content, "rsdoc://mycrate/1.0.0/mycrate::Output") {
+		t.Errorf("expected Output URI in Types Used, got:\n%s", reqFrag.Content)
 	}
 }
 

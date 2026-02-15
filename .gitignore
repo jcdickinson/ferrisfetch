@@ -4,9 +4,10 @@ scratch/
 CLAUDE.local.md
 claude.justfile
 .direnv/
+/result
 
 # Go binaries
-simplemem
+/ferrisfetch
 *.exe
 *.dll
 *.so
@@ -27,5 +28,4 @@ simplemem
 
 # Config
 
-.config/simplemem
 .claude/settings.local.json

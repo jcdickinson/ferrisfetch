@@ -1,5 +1,5 @@
 {
-  description = "A simple semantic memory MCP.";
+  description = "MCP server for semantic search of Rust crate documentation.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -25,16 +25,18 @@
 
       inherit (pkgs) callPackage;
 
-      go-test = pkgs.stdenvNoCC.mkDerivation {
+      go-test = pkgs.stdenv.mkDerivation {
         name = "go-test";
         dontBuild = true;
         src = ./.;
         doCheck = true;
         nativeBuildInputs = with pkgs; [
           go
+          sqlite.dev
           writableTmpDirAsHomeHook
         ];
         checkPhase = ''
+          export CGO_ENABLED=1
           go test -v ./...
         '';
         installPhase = ''
@@ -42,7 +44,7 @@
         '';
       };
       # Simple lint check added to nix flake check
-      go-lint = pkgs.stdenvNoCC.mkDerivation {
+      go-lint = pkgs.stdenv.mkDerivation {
         name = "go-lint";
         dontBuild = true;
         src = ./.;
@@ -50,9 +52,11 @@
         nativeBuildInputs = with pkgs; [
           golangci-lint
           go
+          sqlite.dev
           writableTmpDirAsHomeHook
         ];
         checkPhase = ''
+          export CGO_ENABLED=1
           golangci-lint run
         '';
         installPhase = ''
@@ -65,17 +69,10 @@
         inherit go-test go-lint;
       };
       packages = {
-        simplemem = callPackage ./default.nix {
-          inherit (gomod2nix) buildGoApplication;
-          pname = "simplemem";
-          subPackages = ["cmd/simplemem"];
-          meta = {
-            mainProgram = "simplemem";
-          };
-        };
-        default = callPackage ./default.nix {
+        ferrisfetch = callPackage ./default.nix {
           inherit (gomod2nix) buildGoApplication;
         };
+        default = self.packages.${system}.ferrisfetch;
       };
       devShells.default = callPackage ./shell.nix {
         inherit (gomod2nix) mkGoEnv gomod2nix;

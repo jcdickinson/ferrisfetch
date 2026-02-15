@@ -35,6 +35,7 @@ func NewServer(socketPath string) (*Server, error) {
 		server.WithInstructions(instructions),
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
+		server.WithLogging(),
 	)
 
 	s.registerTools(mcpServer)
@@ -117,7 +118,7 @@ func addCratesSchema(t *mcp.Tool) {
 func (s *Server) registerResources(mcpServer *server.MCPServer) {
 	mcpServer.AddResourceTemplate(
 		mcp.NewResourceTemplate(
-			"rsdoc://{crate}/{version}/{path}",
+			"rsdoc://{crate}/{version}/{+path}",
 			"Rust documentation item",
 			mcp.WithTemplateDescription("Read a specific Rust documentation item. Search results return these URIs."),
 			mcp.WithTemplateMIMEType("text/markdown"),
@@ -143,12 +144,26 @@ func (s *Server) handleAddCrates(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError(fmt.Sprintf("invalid crates format: %v", err)), nil
 	}
 
-	resp, err := s.client.AddCrates(ctx, specs, nil)
+	onProgress := func(msg string) {
+		srv := server.ServerFromContext(ctx)
+		if srv == nil {
+			return
+		}
+		srv.SendLogMessageToClient(ctx, mcp.NewLoggingMessageNotification(
+			mcp.LoggingLevelInfo, "ferrisfetch", msg,
+		))
+	}
+
+	resp, err := s.client.AddCrates(ctx, specs, onProgress)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to add crates: %v", err)), nil
 	}
 
-	resultJSON, _ := json.MarshalIndent(resp.Results, "", "  ")
+	results := resp.Results
+	if results == nil {
+		results = []rpc.CrateResult{}
+	}
+	resultJSON, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(resultJSON)), nil
 }
 

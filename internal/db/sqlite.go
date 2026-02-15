@@ -2,17 +2,31 @@ package db
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
+	"github.com/habedi/hann/core"
+	"github.com/habedi/hann/hnsw"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+const (
+	embeddingDim = 1024
+	hnswM        = 16
+	hnswEf       = 100
 )
 
 type DB struct {
-	conn *sql.DB
+	conn     *sql.DB
+	hnsw     *hnsw.HNSWIndex
+	hnswPath string
 }
 
 func New(dbPath string) (*DB, error) {
@@ -20,35 +34,49 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("creating cache directory: %w", err)
 	}
 
-	conn, err := sql.Open("duckdb", dbPath)
+	// If an existing file isn't SQLite, delete it (stale DuckDB file).
+	if info, err := os.Stat(dbPath); err == nil && info.Size() >= 4 {
+		f, err := os.Open(dbPath)
+		if err == nil {
+			header := make([]byte, 4)
+			n, _ := f.Read(header)
+			f.Close()
+			if n >= 4 && string(header) != "SQLi" {
+				log.Printf("Removing non-SQLite database file at %s", dbPath)
+				os.Remove(dbPath)
+			}
+		}
+	}
+
+	hnswPath := strings.TrimSuffix(dbPath, filepath.Ext(dbPath)) + ".hnsw"
+
+	dsn := "file:" + dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	db := &DB{conn: conn}
-	if err := db.initSchema(); err != nil {
+	d := &DB{conn: conn, hnswPath: hnswPath}
+	if err := d.initSchema(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
-	return db, nil
+	if err := d.loadOrCreateHNSW(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("initializing HNSW index: %w", err)
+	}
+
+	return d, nil
 }
 
 func (db *DB) Close() error {
+	db.saveHNSW()
 	return db.conn.Close()
 }
 
 func (db *DB) initSchema() error {
 	queries := []string{
-		`INSTALL vss;`,
-		`LOAD vss;`,
-
-		`CREATE SEQUENCE IF NOT EXISTS seq_crate_id START 1;`,
-		`CREATE SEQUENCE IF NOT EXISTS seq_item_id START 1;`,
-		`CREATE SEQUENCE IF NOT EXISTS seq_embedding_id START 1;`,
-		`CREATE SEQUENCE IF NOT EXISTS seq_backlink_id START 1;`,
-		`CREATE SEQUENCE IF NOT EXISTS seq_reexport_id START 1;`,
-
 		`CREATE TABLE IF NOT EXISTS crates (
 			id INTEGER PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -82,20 +110,9 @@ func (db *DB) initSchema() error {
 			content_hash TEXT NOT NULL,
 			chunk_text TEXT NOT NULL,
 			chunk_index INTEGER NOT NULL,
-			embedding FLOAT[1024] NOT NULL
+			embedding BLOB NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings (content_hash)`,
-
-		`CREATE TABLE IF NOT EXISTS semantic_backlinks (
-			id INTEGER PRIMARY KEY,
-			hash_a TEXT NOT NULL,
-			hash_b TEXT NOT NULL,
-			similarity_score FLOAT NOT NULL,
-			UNIQUE(hash_a, hash_b),
-			CHECK(hash_a < hash_b)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_backlinks_a ON semantic_backlinks (hash_a)`,
-		`CREATE INDEX IF NOT EXISTS idx_backlinks_b ON semantic_backlinks (hash_b)`,
 
 		`CREATE TABLE IF NOT EXISTS reexports (
 			id INTEGER PRIMARY KEY,
@@ -141,21 +158,21 @@ func (db *DB) UpsertCrate(name, version string) (*Crate, error) {
 		return nil, fmt.Errorf("checking crate: %w", err)
 	}
 
-	_, err = db.conn.Exec(
-		`INSERT INTO crates (id, name, version) VALUES (nextval('seq_crate_id'), ?, ?)`,
+	result, err := db.conn.Exec(
+		`INSERT INTO crates (name, version) VALUES (?, ?)`,
 		name, version,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("inserting crate: %w", err)
 	}
 
-	var id int
-	if err := db.conn.QueryRow("SELECT currval('seq_crate_id')").Scan(&id); err != nil {
+	id, err := result.LastInsertId()
+	if err != nil {
 		return nil, fmt.Errorf("getting crate id: %w", err)
 	}
 
 	now := time.Now()
-	return &Crate{ID: id, Name: name, Version: version, LastUsedAt: now}, nil
+	return &Crate{ID: int(id), Name: name, Version: version, LastUsedAt: now}, nil
 }
 
 func (db *DB) MarkCrateFetched(crateID int) error {
@@ -239,19 +256,21 @@ type Item struct {
 }
 
 func (db *DB) InsertItem(item *Item) error {
-	_, err := db.conn.Exec(
-		`INSERT INTO items (id, crate_id, rustdoc_id, name, path, kind, content_hash, signature, doc_links, fragment_names)
-		 VALUES (nextval('seq_item_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	result, err := db.conn.Exec(
+		`INSERT INTO items (crate_id, rustdoc_id, name, path, kind, content_hash, signature, doc_links, fragment_names)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.CrateID, item.RustdocID, item.Name, item.Path, item.Kind, item.ContentHash, item.Signature, item.DocLinks, item.FragmentNames,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting item: %w", err)
 	}
 
-	return db.conn.QueryRow(
-		`SELECT id FROM items WHERE crate_id = ? AND rustdoc_id = ?`,
-		item.CrateID, item.RustdocID,
-	).Scan(&item.ID)
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("getting item id: %w", err)
+	}
+	item.ID = int(id)
+	return nil
 }
 
 func (db *DB) GetItem(itemID int) (*Item, error) {
@@ -288,35 +307,23 @@ func (db *DB) GetItemByPath(crateID int, path string) (*Item, error) {
 // GetItemForHash picks a representative item for a content hash.
 // When crateIDs are specified, it prefers items from those crates.
 func (db *DB) GetItemForHash(contentHash string, crateIDs []int) (*Item, error) {
+	query := `SELECT id, crate_id, rustdoc_id, name, path, kind, content_hash, signature, doc_links, fragment_names
+		 FROM items WHERE content_hash = ?`
+	var params []interface{}
+	params = append(params, contentHash)
+
 	if len(crateIDs) > 0 {
 		placeholders := make([]string, len(crateIDs))
-		params := make([]interface{}, 0, len(crateIDs)+1)
-		params = append(params, contentHash)
 		for i, id := range crateIDs {
 			placeholders[i] = "?"
 			params = append(params, id)
 		}
-		var it Item
-		err := db.conn.QueryRow(
-			fmt.Sprintf(`SELECT id, crate_id, rustdoc_id, name, path, kind, content_hash, signature, doc_links, fragment_names
-			 FROM items WHERE content_hash = ? AND crate_id IN (%s) LIMIT 1`,
-				strings.Join(placeholders, ",")),
-			params...,
-		).Scan(&it.ID, &it.CrateID, &it.RustdocID, &it.Name, &it.Path, &it.Kind, &it.ContentHash, &it.Signature, &it.DocLinks, &it.FragmentNames)
-		if err == nil {
-			return &it, nil
-		}
-		if err != sql.ErrNoRows {
-			return nil, err
-		}
-		// Fall through to any crate
+		query += fmt.Sprintf(` AND crate_id IN (%s)`, strings.Join(placeholders, ","))
 	}
+	query += ` LIMIT 1`
 
 	var it Item
-	err := db.conn.QueryRow(
-		`SELECT id, crate_id, rustdoc_id, name, path, kind, content_hash, signature, doc_links, fragment_names
-		 FROM items WHERE content_hash = ? LIMIT 1`, contentHash,
-	).Scan(&it.ID, &it.CrateID, &it.RustdocID, &it.Name, &it.Path, &it.Kind, &it.ContentHash, &it.Signature, &it.DocLinks, &it.FragmentNames)
+	err := db.conn.QueryRow(query, params...).Scan(&it.ID, &it.CrateID, &it.RustdocID, &it.Name, &it.Path, &it.Kind, &it.ContentHash, &it.Signature, &it.DocLinks, &it.FragmentNames)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -333,22 +340,36 @@ func (db *DB) DeleteItemsByCrate(crateID int) error {
 
 // --- Embedding operations ---
 
-const expectedEmbeddingDim = 1024
-
 func (db *DB) InsertEmbedding(contentHash string, chunkText string, chunkIndex int, embedding []float32) error {
-	if len(embedding) != expectedEmbeddingDim {
-		return fmt.Errorf("expected embedding dimension %d, got %d", expectedEmbeddingDim, len(embedding))
+	if len(embedding) != embeddingDim {
+		return fmt.Errorf("expected embedding dimension %d, got %d", embeddingDim, len(embedding))
 	}
-	embStr, err := formatEmbedding(embedding)
-	if err != nil {
-		return fmt.Errorf("formatting embedding: %w", err)
+	if err := validateEmbedding(embedding); err != nil {
+		return err
 	}
-	_, err = db.conn.Exec(
-		`INSERT INTO embeddings (id, content_hash, chunk_text, chunk_index, embedding)
-		 VALUES (nextval('seq_embedding_id'), ?, ?, ?, ?::FLOAT[1024])`,
-		contentHash, chunkText, chunkIndex, embStr,
+
+	blob := serializeFloat32(embedding)
+	result, err := db.conn.Exec(
+		`INSERT INTO embeddings (content_hash, chunk_text, chunk_index, embedding) VALUES (?, ?, ?, ?)`,
+		contentHash, chunkText, chunkIndex, blob,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting embedding: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("getting embedding id: %w", err)
+	}
+
+	// Copy to avoid hann's in-place normalization mutating our slice.
+	vec := make([]float32, len(embedding))
+	copy(vec, embedding)
+	if err := db.hnsw.Add(int(id), vec); err != nil {
+		return fmt.Errorf("adding to HNSW index: %w", err)
+	}
+
+	return nil
 }
 
 // HasEmbeddings checks if a content hash already has embeddings stored.
@@ -370,148 +391,138 @@ type SearchResult struct {
 	Similarity  float32
 }
 
-func (db *DB) VectorSearch(embedding []float32, threshold float32, limit int, crateIDs []int) ([]SearchResult, error) {
-	embStr, err := formatEmbedding(embedding)
+// knnSearch runs a KNN query against the HNSW index and returns content_hash + similarity pairs,
+// grouped by content_hash (keeping the best similarity per hash).
+func (db *DB) knnSearch(embedding []float32, fetchLimit int, threshold float32, allowedHashes map[string]bool) (map[string]float32, error) {
+	stats := db.hnsw.Stats()
+	if stats.Count == 0 {
+		return nil, nil
+	}
+
+	topK := fetchLimit
+	if topK > stats.Count {
+		topK = stats.Count
+	}
+
+	hits, err := db.hnsw.Search(embedding, topK)
 	if err != nil {
-		return nil, fmt.Errorf("formatting embedding: %w", err)
+		return nil, fmt.Errorf("HNSW search: %w", err)
+	}
+	if len(hits) == 0 {
+		return nil, nil
 	}
 
-	var crateFilter string
-	var params []interface{}
-	if len(crateIDs) > 0 {
-		placeholders := make([]string, len(crateIDs))
-		for i, id := range crateIDs {
-			placeholders[i] = "?"
-			params = append(params, id)
+	// Batch lookup content_hash for matched IDs.
+	placeholders := make([]string, len(hits))
+	params := make([]interface{}, len(hits))
+	for i, h := range hits {
+		placeholders[i] = "?"
+		params[i] = h.ID
+	}
+	hashRows, err := db.conn.Query(
+		fmt.Sprintf(`SELECT id, content_hash FROM embeddings WHERE id IN (%s)`, strings.Join(placeholders, ",")),
+		params...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("looking up content hashes: %w", err)
+	}
+	defer hashRows.Close()
+
+	idToHash := make(map[int]string, len(hits))
+	for hashRows.Next() {
+		var id int
+		var hash string
+		if err := hashRows.Scan(&id, &hash); err != nil {
+			return nil, err
 		}
-		crateFilter = fmt.Sprintf(` AND EXISTS (SELECT 1 FROM items i WHERE i.content_hash = dists.content_hash AND i.crate_id IN (%s))`,
-			strings.Join(placeholders, ","))
+		idToHash[id] = hash
 	}
 
-	query := fmt.Sprintf(`
-		WITH dists AS (
-			SELECT e.content_hash, (1 - (e.embedding <=> %s)) as sim
-			FROM embeddings e
-		)
-		SELECT content_hash, MAX(sim) as similarity
-		FROM dists
-		WHERE sim > ?%s
-		GROUP BY content_hash
-		ORDER BY similarity DESC
-		LIMIT ?`, embStr, crateFilter)
+	// Post-process: convert distance → similarity, filter, group by content_hash.
+	best := make(map[string]float32)
+	for _, h := range hits {
+		hash, ok := idToHash[h.ID]
+		if !ok {
+			continue
+		}
+		sim := float32(1 - h.Distance)
+		if sim <= threshold {
+			continue
+		}
+		if allowedHashes != nil && !allowedHashes[hash] {
+			continue
+		}
+		if prev, ok := best[hash]; !ok || sim > prev {
+			best[hash] = sim
+		}
+	}
 
-	params = append([]interface{}{threshold}, params...)
-	params = append(params, limit)
+	return best, nil
+}
 
+func (db *DB) VectorSearch(embedding []float32, threshold float32, limit int, crateIDs []int) ([]SearchResult, error) {
+	// Load allowed content hashes if filtering by crate.
+	var allowedHashes map[string]bool
+	if len(crateIDs) > 0 {
+		var err error
+		allowedHashes, err = db.contentHashesForCrates(crateIDs)
+		if err != nil {
+			return nil, fmt.Errorf("loading crate hashes: %w", err)
+		}
+		if len(allowedHashes) == 0 {
+			return nil, nil
+		}
+	}
+
+	fetchLimit := limit * 10
+	if fetchLimit > 5000 {
+		fetchLimit = 5000
+	}
+
+	best, err := db.knnSearch(embedding, fetchLimit, threshold, allowedHashes)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]SearchResult, 0, len(best))
+	for hash, sim := range best {
+		results = append(results, SearchResult{ContentHash: hash, Similarity: sim})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+// contentHashesForCrates returns the set of content hashes belonging to the given crate IDs.
+func (db *DB) contentHashesForCrates(crateIDs []int) (map[string]bool, error) {
+	placeholders := make([]string, len(crateIDs))
+	params := make([]interface{}, len(crateIDs))
+	for i, id := range crateIDs {
+		placeholders[i] = "?"
+		params[i] = id
+	}
+	query := fmt.Sprintf(
+		`SELECT DISTINCT content_hash FROM items WHERE crate_id IN (%s) AND content_hash IS NOT NULL`,
+		strings.Join(placeholders, ","))
 	rows, err := db.conn.Query(query, params...)
 	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		if err := rows.Scan(&r.ContentHash, &r.Similarity); err != nil {
-			return nil, fmt.Errorf("scanning search result: %w", err)
-		}
-		results = append(results, r)
-	}
-	return results, nil
-}
-
-// --- Backlink operations ---
-
-func (db *DB) UpsertBacklink(hashA, hashB string, similarity float32) error {
-	if hashA > hashB {
-		hashA, hashB = hashB, hashA
-	}
-	_, err := db.conn.Exec(
-		`INSERT INTO semantic_backlinks (id, hash_a, hash_b, similarity_score)
-		 VALUES (nextval('seq_backlink_id'), ?, ?, ?)
-		 ON CONFLICT (hash_a, hash_b) DO UPDATE SET similarity_score = EXCLUDED.similarity_score`,
-		hashA, hashB, similarity,
-	)
-	return err
-}
-
-func (db *DB) GetBacklinks(contentHash string, minSimilarity float32) ([]struct {
-	ContentHash string
-	Similarity  float32
-}, error) {
-	query := `
-		SELECT CASE WHEN hash_a = ? THEN hash_b ELSE hash_a END as other_hash,
-		       similarity_score
-		FROM semantic_backlinks
-		WHERE (hash_a = ? OR hash_b = ?) AND similarity_score >= ?
-		ORDER BY similarity_score DESC`
-
-	rows, err := db.conn.Query(query, contentHash, contentHash, contentHash, minSimilarity)
-	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var results []struct {
-		ContentHash string
-		Similarity  float32
-	}
+	hashes := make(map[string]bool)
 	for rows.Next() {
-		var r struct {
-			ContentHash string
-			Similarity  float32
-		}
-		if err := rows.Scan(&r.ContentHash, &r.Similarity); err != nil {
+		var h string
+		if err := rows.Scan(&h); err != nil {
 			return nil, err
 		}
-		results = append(results, r)
+		hashes[h] = true
 	}
-	return results, nil
-}
-
-// FindSimilarContent finds content hashes similar to the given embedding for backlink generation.
-func (db *DB) FindSimilarContent(embedding []float32, threshold float32, limit int, excludeHash string) ([]struct {
-	ContentHash string
-	Similarity  float32
-}, error) {
-	embStr, err := formatEmbedding(embedding)
-	if err != nil {
-		return nil, fmt.Errorf("formatting embedding: %w", err)
-	}
-
-	query := fmt.Sprintf(`
-		WITH dists AS (
-			SELECT e.content_hash, (1 - (e.embedding <=> %s)) as sim
-			FROM embeddings e
-		)
-		SELECT content_hash, MAX(sim) as similarity
-		FROM dists
-		WHERE content_hash != ? AND sim > ?
-		GROUP BY content_hash
-		ORDER BY similarity DESC
-		LIMIT ?`, embStr)
-
-	rows, err := db.conn.Query(query, excludeHash, threshold, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []struct {
-		ContentHash string
-		Similarity  float32
-	}
-	for rows.Next() {
-		var r struct {
-			ContentHash string
-			Similarity  float32
-		}
-		if err := rows.Scan(&r.ContentHash, &r.Similarity); err != nil {
-			return nil, err
-		}
-		results = append(results, r)
-	}
-	return results, nil
+	return hashes, nil
 }
 
 // GetCratesForItems returns a map from item ID to Crate for the given item IDs in a single query.
@@ -575,7 +586,7 @@ func (db *DB) GetCrateIDsByNames(names []string) ([]int, error) {
 	return ids, nil
 }
 
-// GetIndexedVersions returns name→version for processed crates matching the given names.
+// GetIndexedVersions returns name->version for processed crates matching the given names.
 // If multiple versions exist for the same name, the one with the latest processed_at wins.
 func (db *DB) GetIndexedVersions(names []string) (map[string]string, error) {
 	if len(names) == 0 {
@@ -623,10 +634,10 @@ func (db *DB) CountItems(crateID int) (int, error) {
 
 func (db *DB) InsertReexport(crateID int, localPrefix, sourceCrate, sourcePrefix string) error {
 	_, err := db.conn.Exec(
-		`INSERT INTO reexports (id, crate_id, local_prefix, source_crate, source_prefix)
-		 VALUES (nextval('seq_reexport_id'), ?, ?, ?, ?)
-		 ON CONFLICT (crate_id, local_prefix) DO UPDATE SET source_crate = ?, source_prefix = ?`,
-		crateID, localPrefix, sourceCrate, sourcePrefix, sourceCrate, sourcePrefix,
+		`INSERT INTO reexports (crate_id, local_prefix, source_crate, source_prefix)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (crate_id, local_prefix) DO UPDATE SET source_crate = EXCLUDED.source_crate, source_prefix = EXCLUDED.source_prefix`,
+		crateID, localPrefix, sourceCrate, sourcePrefix,
 	)
 	return err
 }
@@ -658,13 +669,101 @@ func (db *DB) ResolveReexport(crateID int, path string) (sourceCrate, sourcePath
 	return srcCrate, srcPrefix + suffix, true
 }
 
-func formatEmbedding(embedding []float32) (string, error) {
-	strs := make([]string, len(embedding))
-	for i, v := range embedding {
-		if v != v || v-v != 0 { // NaN or Inf check without math import
-			return "", fmt.Errorf("embedding contains NaN or Inf at index %d", i)
+func newHNSW() *hnsw.HNSWIndex {
+	return hnsw.NewHNSW(embeddingDim, hnswM, hnswEf, core.Distances["cosine"], "cosine")
+}
+
+// loadOrCreateHNSW loads the HNSW index from disk, or creates a new one.
+// If embeddings exist in SQLite but the HNSW file is missing, rebuilds from SQLite.
+func (db *DB) loadOrCreateHNSW() error {
+	if f, err := os.Open(db.hnswPath); err == nil {
+		db.hnsw = newHNSW()
+		if err := db.hnsw.Load(f); err != nil {
+			f.Close()
+			return fmt.Errorf("loading HNSW index: %w", err)
 		}
-		strs[i] = fmt.Sprintf("%g", v)
+		f.Close()
+		return nil
 	}
-	return "[" + strings.Join(strs, ",") + "]", nil
+
+	db.hnsw = newHNSW()
+
+	// Rebuild from SQLite if embeddings exist.
+	var count int
+	db.conn.QueryRow(`SELECT COUNT(*) FROM embeddings`).Scan(&count)
+	if count == 0 {
+		return nil
+	}
+
+	log.Printf("rebuilding HNSW index from %d embeddings in SQLite", count)
+
+	rows, err := db.conn.Query(`SELECT id, embedding FROM embeddings`)
+	if err != nil {
+		return fmt.Errorf("reading embeddings for HNSW rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return fmt.Errorf("scanning embedding row: %w", err)
+		}
+		vec := deserializeFloat32(blob)
+		if len(vec) != embeddingDim {
+			log.Printf("skipping embedding id=%d: dimension %d != %d", id, len(vec), embeddingDim)
+			continue
+		}
+		if err := db.hnsw.Add(id, vec); err != nil {
+			log.Printf("skipping embedding id=%d: %v", id, err)
+		}
+	}
+
+	db.saveHNSW()
+	return nil
+}
+
+// SaveHNSW persists the HNSW index to disk.
+func (db *DB) SaveHNSW() {
+	db.saveHNSW()
+}
+
+func (db *DB) saveHNSW() {
+	if db.hnsw == nil {
+		return
+	}
+	f, err := os.Create(db.hnswPath)
+	if err != nil {
+		log.Printf("failed to create HNSW file: %v", err)
+		return
+	}
+	if err := db.hnsw.Save(f); err != nil {
+		log.Printf("failed to save HNSW index: %v", err)
+	}
+	f.Close()
+}
+
+func serializeFloat32(v []float32) []byte {
+	buf := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
+
+func deserializeFloat32(buf []byte) []float32 {
+	v := make([]float32, len(buf)/4)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*4:]))
+	}
+	return v
+}
+
+func validateEmbedding(embedding []float32) error {
+	for i, v := range embedding {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return fmt.Errorf("embedding contains NaN or Inf at index %d", i)
+		}
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -64,6 +65,38 @@ func (c *Client) IsAvailable() bool {
 	return true
 }
 
+// do executes an HTTP request, respawning the daemon on connection failure and retrying once.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.httpClient.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	if !isConnError(err) {
+		return nil, err
+	}
+
+	// Daemon is gone — respawn and retry.
+	if spawnErr := Spawn(); spawnErr != nil {
+		return nil, fmt.Errorf("respawning daemon: %w (original: %w)", spawnErr, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		if c.IsAvailable() {
+			return c.httpClient.Do(req)
+		}
+	}
+	return nil, fmt.Errorf("daemon did not restart: %w", err)
+}
+
+func isConnError(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	return false
+}
+
 func (c *Client) AddCrates(ctx context.Context, crates []rpc.CrateSpec, onProgress func(string)) (*rpc.AddCratesResponse, error) {
 	jsonData, err := json.Marshal(rpc.AddCratesRequest{Crates: crates})
 	if err != nil {
@@ -76,7 +109,7 @@ func (c *Client) AddCrates(ctx context.Context, crates []rpc.CrateSpec, onProgre
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sending request: %w", err)
 	}
@@ -126,7 +159,7 @@ func (c *Client) Status(ctx context.Context) (*rpc.StatusResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	httpResp, err := c.httpClient.Do(req)
+	httpResp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("status request: %w", err)
 	}
@@ -167,7 +200,7 @@ func (c *Client) post(ctx context.Context, path string, body, result interface{}
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("sending request: %w", err)
 	}
