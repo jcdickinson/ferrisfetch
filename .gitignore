@@ -1,0 +1,31 @@
+build/
+.jj/
+scratch/
+CLAUDE.local.md
+claude.justfile
+.direnv/
+
+# Go binaries
+simplemem
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Coverage files
+*.out
+
+# Local database cache
+.cache/
+
+# Tool directories
+.chunkhound/
+.serena/
+
+# Config
+
+.config/simplemem
+.claude/settings.local.json
