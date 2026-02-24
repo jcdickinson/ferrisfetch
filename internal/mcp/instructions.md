@@ -7,6 +7,7 @@ Ferrisfetch indexes Rust crate documentation from docs.rs and provides semantic 
 - **Do NOT use curl, wget, or web fetching to access docs.rs directly.** Ferrisfetch parses rustdoc JSON and provides clean, searchable markdown. Raw docs.rs HTML is noisy and wastes tokens. Always use Ferrisfetch tools instead.
 - **`core`, `std`, `alloc`, `proc_macro`, `test`, and other standard library crates are NOT on docs.rs and will always 404.** Do not attempt to index them. Rely on your training data for standard library documentation.
 - Ferrisfetch auto-fetches crates on read if they haven't been indexed yet, so you can often skip `add_crates` for one-off lookups.
+- Consider using sub-agents to find specific answers using Ferrisfetch, instead of bringing multiple documentation pages into the primary chat context, unless you think that documentation could be useful multiple times.
 
 ## Workflow
 
@@ -18,21 +19,27 @@ Ferrisfetch indexes Rust crate documentation from docs.rs and provides semantic 
 ## Tools
 
 ### `add_crates`
+
 Index one or more crates. Call this to ensure crates are indexed before searching.
+
 ```json
-{"crates": [{"name": "serde"}, {"name": "tokio", "version": "1.0"}]}
+{ "crates": [{ "name": "serde" }, { "name": "tokio", "version": "1.0" }] }
 ```
 
 ### `search_docs`
+
 Semantic search across indexed documentation. Returns `rsdoc://` resource URIs you can read for full docs. Use `crates` to filter; omit to search everything indexed.
+
 ```json
-{"query": "serialize a struct to JSON", "crates": ["serde", "serde_json"]}
+{ "query": "serialize a struct to JSON", "crates": ["serde", "serde_json"] }
 ```
 
 ### `search_crates`
+
 Search crates.io for Rust crates by name or keyword. Results indicate which crates are already indexed locally.
+
 ```json
-{"query": "async http client"}
+{ "query": "async http client" }
 ```
 
 ## Resources
