@@ -30,8 +30,8 @@ jobs:
 
       - name: Create archive
         run: |
-          archive_name="ferrisfetch-${{ github.event.release.tag_name }}-linux-amd64"
-          tar -czf "${archive_name}.tar.gz" -C result/bin ferrisfetch -C ${{ github.workspace }} README.md LICENSE
+          archive_name="rsdoc-${{ github.event.release.tag_name }}-linux-amd64"
+          tar -czf "${archive_name}.tar.gz" -C result/bin rsdoc -C ${{ github.workspace }} README.md LICENSE
           echo "ASSET=${archive_name}.tar.gz" >> $GITHUB_ENV
 
       - name: Upload release asset
