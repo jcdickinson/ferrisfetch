@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -109,7 +109,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.expTimer = time.AfterFunc(s.expiration, s.expire)
 	s.mu.Unlock()
 
-	log.Printf("daemon: listening on %s (expires after %s of inactivity)", s.socketPath, s.expiration)
+	slog.Info("daemon listening", "socket", s.socketPath, "expiration", s.expiration)
 
 	if err := s.httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("serving: %w", err)
@@ -121,22 +121,22 @@ func (s *Server) Stop(ctx context.Context) error {
 	var errs []error
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
-			log.Printf("daemon: shutdown error: %v", err)
+			slog.Error("shutdown error", "error", err)
 			errs = append(errs, err)
 		}
 	}
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
-			log.Printf("daemon: listener close error: %v", err)
+			slog.Error("listener close error", "error", err)
 			errs = append(errs, err)
 		}
 	}
 	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("daemon: socket remove error: %v", err)
+		slog.Error("socket remove error", "error", err)
 		errs = append(errs, err)
 	}
 	if err := s.db.Close(); err != nil {
-		log.Printf("daemon: db close error: %v", err)
+		slog.Error("db close error", "error", err)
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -144,11 +144,11 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) expire() {
 	if n := s.activeOps.Load(); n > 0 {
-		log.Printf("daemon: expiration deferred, %d ops in progress", n)
+		slog.Info("expiration deferred", "active_ops", n)
 		s.resetExpiration()
 		return
 	}
-	log.Printf("daemon: expiring due to inactivity")
+	slog.Info("expiring due to inactivity")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s.Stop(ctx)
@@ -188,9 +188,9 @@ func (s *Server) handleAddCrates(w http.ResponseWriter, r *http.Request) {
 
 	enc := json.NewEncoder(w)
 	send := func(line rpc.ProgressLine) bool {
-		log.Printf("daemon: %s", line.Message)
+		slog.Info(line.Message)
 		if err := enc.Encode(line); err != nil {
-			log.Printf("daemon: client disconnected: %v", err)
+			slog.Warn("client disconnected", "error", err)
 			return false
 		}
 		if flusher != nil {
@@ -409,7 +409,7 @@ func (s *Server) resolveVersion(name, version string, progress func(string)) (st
 
 	// Cache rustdoc JSON to disk for on-the-fly fragment generation
 	if err := docs.SaveCrateCache(data, name, realVersion); err != nil {
-		log.Printf("daemon: failed to cache rustdoc JSON for %s@%s: %v", name, realVersion, err)
+		slog.Error("failed to cache rustdoc JSON", "crate", name, "version", realVersion, "error", err)
 	}
 
 	return realVersion, rustdocCrate, items, nil
@@ -425,7 +425,7 @@ func (s *Server) indexItems(crate *db.Crate, rustdocCrate *docs.RustdocCrate, it
 	reexports := docs.CollectReexports(rustdocCrate, crateName)
 	for _, re := range reexports {
 		if err := s.db.InsertReexport(crate.ID, re.LocalPrefix, re.SourceCrate, re.SourcePrefix); err != nil {
-			log.Printf("daemon: failed to insert reexport %s → %s/%s: %v", re.LocalPrefix, re.SourceCrate, re.SourcePrefix, err)
+			slog.Error("failed to insert reexport", "local", re.LocalPrefix, "source_crate", re.SourceCrate, "source_prefix", re.SourcePrefix, "error", err)
 		}
 	}
 
@@ -435,7 +435,7 @@ func (s *Server) indexItems(crate *db.Crate, rustdocCrate *docs.RustdocCrate, it
 		if parsed.Docs != "" {
 			h, err := cas.Write(parsed.Docs)
 			if err != nil {
-				log.Printf("daemon: failed to write CAS for %s: %v", parsed.Path, err)
+				slog.Error("failed to write CAS", "path", parsed.Path, "error", err)
 				continue
 			}
 			contentHash = h
@@ -469,7 +469,7 @@ func (s *Server) indexItems(crate *db.Crate, rustdocCrate *docs.RustdocCrate, it
 			FragmentNames: fragNamesJSON,
 		}
 		if err := s.db.InsertItem(dbItem); err != nil {
-			log.Printf("daemon: failed to insert item %s: %v", parsed.Path, err)
+			slog.Error("failed to insert item", "path", parsed.Path, "error", err)
 			continue
 		}
 
@@ -487,7 +487,7 @@ func (s *Server) indexItems(crate *db.Crate, rustdocCrate *docs.RustdocCrate, it
 			}
 			fragHash, err := cas.Write(frag.Content)
 			if err != nil {
-				log.Printf("daemon: failed to write CAS for %s#%s: %v", parsed.Path, frag.Name, err)
+				slog.Error("failed to write CAS for fragment", "path", parsed.Path, "fragment", frag.Name, "error", err)
 				continue
 			}
 			toEmbed = append(toEmbed, embeddable{contentHash: fragHash, preamble: parsed.Path + "#" + frag.Name})
@@ -539,7 +539,7 @@ func (s *Server) embedItems(toEmbed []embeddable, name, version string, progress
 
 		docsText, err := cas.Read(e.contentHash)
 		if err != nil {
-			log.Printf("daemon: failed to read CAS %s: %v", e.contentHash, err)
+			slog.Error("failed to read CAS", "hash", e.contentHash, "error", err)
 			continue
 		}
 
@@ -571,7 +571,7 @@ func (s *Server) embedItems(toEmbed []embeddable, name, version string, progress
 	for j, emb := range allEmbeddings {
 		meta := metas[j]
 		if err := s.db.InsertEmbedding(meta.contentHash, meta.chunkText, meta.chunkIndex, emb); err != nil {
-			log.Printf("daemon: failed to store embedding for hash %s chunk %d: %v", meta.contentHash, meta.chunkIndex, err)
+			slog.Error("failed to store embedding", "hash", meta.contentHash, "chunk", meta.chunkIndex, "error", err)
 		}
 	}
 
@@ -597,16 +597,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if len(req.Crates) > 0 {
 		indexed, err := s.db.GetIndexedVersions(req.Crates)
 		if err != nil {
-			log.Printf("search: failed to check indexed versions: %v", err)
+			slog.Error("failed to check indexed versions", "error", err)
 		} else {
 			for _, name := range req.Crates {
 				if _, ok := indexed[name]; !ok {
-					log.Printf("search: auto-fetching unindexed crate %s", name)
+					slog.Info("auto-fetching unindexed crate", "crate", name)
 					result := s.addCrate(rpc.CrateSpec{Name: name}, func(msg string) {
-						log.Printf("auto-fetch: %s", msg)
+						slog.Info(msg, "source", "auto-fetch")
 					})
 					if result.Error != "" {
-						log.Printf("search: auto-fetch of %s failed: %s", name, result.Error)
+						slog.Error("auto-fetch failed", "crate", name, "error", result.Error)
 					}
 				}
 			}
@@ -645,7 +645,7 @@ func (s *Server) resolveOrFetchCrate(name, version string) (*db.Crate, error) {
 
 	// Not found — auto-fetch
 	result := s.addCrate(rpc.CrateSpec{Name: name, Version: version}, func(msg string) {
-		log.Printf("auto-fetch: %s", msg)
+		slog.Info(msg, "source", "auto-fetch")
 	})
 	if result.Error != "" {
 		return nil, fmt.Errorf("%s", result.Error)
@@ -685,11 +685,11 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 		if found {
 			sourceCrate, err := s.resolveOrFetchCrate(srcCrate, "latest")
 			if err != nil {
-				log.Printf("daemon: re-export fetch for %s failed: %v", srcCrate, err)
+				slog.Error("re-export fetch failed", "crate", srcCrate, "error", err)
 			} else if sourceCrate != nil {
 				item, err = s.db.GetItemByPath(sourceCrate.ID, srcPath)
 				if err != nil {
-					log.Printf("daemon: re-export lookup for %s in %s failed: %v", srcPath, srcCrate, err)
+					slog.Error("re-export lookup failed", "path", srcPath, "crate", srcCrate, "error", err)
 				} else if item != nil {
 					crate = sourceCrate
 					req.Crate = sourceCrate.Name
@@ -741,7 +741,7 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 	var docLinks map[string]string
 	if item.DocLinks != "" {
 		if err := json.Unmarshal([]byte(item.DocLinks), &docLinks); err != nil {
-			log.Printf("daemon: failed to unmarshal doc_links for %s: %v", item.Path, err)
+			slog.Error("failed to unmarshal doc_links", "path", item.Path, "error", err)
 		}
 	}
 
@@ -842,7 +842,7 @@ func (s *Server) handleSearchCrates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClearCache(w http.ResponseWriter, r *http.Request) {
 	s.clearVersionCache()
-	log.Printf("daemon: version cache cleared")
+	slog.Info("version cache cleared")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

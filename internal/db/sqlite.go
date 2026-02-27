@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -42,7 +42,7 @@ func New(dbPath string) (*DB, error) {
 			n, _ := f.Read(header)
 			f.Close()
 			if n >= 4 && string(header) != "SQLi" {
-				log.Printf("Removing non-SQLite database file at %s", dbPath)
+				slog.Info("removing non-SQLite database file", "path", dbPath)
 				os.Remove(dbPath)
 			}
 		}
@@ -695,7 +695,7 @@ func (db *DB) loadOrCreateHNSW() error {
 		return nil
 	}
 
-	log.Printf("rebuilding HNSW index from %d embeddings in SQLite", count)
+	slog.Info("rebuilding HNSW index", "embeddings", count)
 
 	rows, err := db.conn.Query(`SELECT id, embedding FROM embeddings`)
 	if err != nil {
@@ -711,11 +711,11 @@ func (db *DB) loadOrCreateHNSW() error {
 		}
 		vec := deserializeFloat32(blob)
 		if len(vec) != embeddingDim {
-			log.Printf("skipping embedding id=%d: dimension %d != %d", id, len(vec), embeddingDim)
+			slog.Warn("skipping embedding with wrong dimension", "id", id, "got", len(vec), "want", embeddingDim)
 			continue
 		}
 		if err := db.hnsw.Add(id, vec); err != nil {
-			log.Printf("skipping embedding id=%d: %v", id, err)
+			slog.Warn("skipping embedding", "id", id, "error", err)
 		}
 	}
 
@@ -734,11 +734,11 @@ func (db *DB) saveHNSW() {
 	}
 	f, err := os.Create(db.hnswPath)
 	if err != nil {
-		log.Printf("failed to create HNSW file: %v", err)
+		slog.Error("failed to create HNSW file", "error", err)
 		return
 	}
 	if err := db.hnsw.Save(f); err != nil {
-		log.Printf("failed to save HNSW index: %v", err)
+		slog.Error("failed to save HNSW index", "error", err)
 	}
 	f.Close()
 }

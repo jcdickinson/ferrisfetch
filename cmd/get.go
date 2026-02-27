@@ -3,7 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/jcdickinson/ferrisfetch/internal/rpc"
@@ -13,9 +14,9 @@ import (
 var getCmd = &cobra.Command{
 	Use:   "get <rsdoc://crate/version/path>",
 	Short: "Read a documentation item by URI",
-	Example: `  ferrisfetch get rsdoc://serde/latest/serde::Serialize
-  ferrisfetch get rsdoc://tokio/1.0.0/tokio::spawn
-  ferrisfetch get serde/latest/serde::Serialize`,
+	Example: `  rsdoc get rsdoc://serde/latest/serde::Serialize
+  rsdoc get rsdoc://tokio/1.0.0/tokio::spawn
+  rsdoc get serde/latest/serde::Serialize`,
 	Args: cobra.ExactArgs(1),
 	Run:  runGet,
 }
@@ -28,7 +29,8 @@ func runGet(cmd *cobra.Command, args []string) {
 	uri := strings.TrimPrefix(args[0], "rsdoc://")
 	parts := strings.SplitN(uri, "/", 3)
 	if len(parts) < 3 {
-		log.Fatalf("invalid URI: need crate/version/path")
+		slog.Error("invalid URI: need crate/version/path")
+		os.Exit(1)
 	}
 
 	path := parts[2]
@@ -40,7 +42,8 @@ func runGet(cmd *cobra.Command, args []string) {
 
 	client, err := connectDaemon()
 	if err != nil {
-		log.Fatalf("failed to connect to daemon: %v", err)
+		slog.Error("failed to connect to daemon", "error", err)
+		os.Exit(1)
 	}
 
 	resp, err := client.GetDoc(context.Background(), rpc.GetDocRequest{
@@ -50,7 +53,8 @@ func runGet(cmd *cobra.Command, args []string) {
 		Fragment: fragment,
 	})
 	if err != nil {
-		log.Fatalf("get doc failed: %v", err)
+		slog.Error("get doc failed", "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Print(resp.Markdown)

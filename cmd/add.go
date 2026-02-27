@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/jcdickinson/ferrisfetch/internal/config"
@@ -17,9 +18,9 @@ var addCmd = &cobra.Command{
 	Use:   "add [crate[@version] ...]",
 	Short: "Index crate documentation from docs.rs",
 	Long:  `Fetch, parse, embed, and index Rust crate documentation. Version defaults to "latest".`,
-	Example: `  ferrisfetch add serde
-  ferrisfetch add serde@1.0 tokio@1.0
-  ferrisfetch add serde serde_json tokio`,
+	Example: `  rsdoc add serde
+  rsdoc add serde@1.0 tokio@1.0
+  rsdoc add serde serde_json tokio`,
 	Args: cobra.MinimumNArgs(1),
 	Run:  runAdd,
 }
@@ -33,14 +34,16 @@ func runAdd(cmd *cobra.Command, args []string) {
 
 	client, err := connectDaemon()
 	if err != nil {
-		log.Fatalf("failed to connect to daemon: %v", err)
+		slog.Error("failed to connect to daemon", "error", err)
+		os.Exit(1)
 	}
 
 	resp, err := client.AddCrates(context.Background(), specs, func(msg string) {
-		fmt.Printf("  %s\n", msg)
+		slog.Info(msg)
 	})
 	if err != nil {
-		log.Fatalf("failed to add crates: %v", err)
+		slog.Error("failed to add crates", "error", err)
+		os.Exit(1)
 	}
 
 	for _, r := range resp.Results {
@@ -55,9 +58,9 @@ func runAdd(cmd *cobra.Command, args []string) {
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search indexed crate documentation",
-	Example: `  ferrisfetch search "serialize a struct to JSON"
-  ferrisfetch search --crate serde "derive macro"
-  ferrisfetch search --limit 5 "async runtime"`,
+	Example: `  rsdoc search "serialize a struct to JSON"
+  rsdoc search --crate serde "derive macro"
+  rsdoc search --limit 5 "async runtime"`,
 	Args: cobra.ExactArgs(1),
 	Run:  runSearch,
 }
@@ -75,7 +78,8 @@ func init() {
 func runSearch(cmd *cobra.Command, args []string) {
 	client, err := connectDaemon()
 	if err != nil {
-		log.Fatalf("failed to connect to daemon: %v", err)
+		slog.Error("failed to connect to daemon", "error", err)
+		os.Exit(1)
 	}
 
 	resp, err := client.Search(context.Background(), rpc.SearchRequest{
@@ -84,7 +88,8 @@ func runSearch(cmd *cobra.Command, args []string) {
 		Limit:  searchLimit,
 	})
 	if err != nil {
-		log.Fatalf("search failed: %v", err)
+		slog.Error("search failed", "error", err)
+		os.Exit(1)
 	}
 
 	if len(resp.Results) == 0 {
@@ -115,12 +120,14 @@ func init() {
 func runStatus(cmd *cobra.Command, args []string) {
 	client, err := connectDaemon()
 	if err != nil {
-		log.Fatalf("failed to connect to daemon: %v", err)
+		slog.Error("failed to connect to daemon", "error", err)
+		os.Exit(1)
 	}
 
 	resp, err := client.Status(context.Background())
 	if err != nil {
-		log.Fatalf("status failed: %v", err)
+		slog.Error("status failed", "error", err)
+		os.Exit(1)
 	}
 
 	if statusJSON {

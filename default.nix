@@ -12,7 +12,7 @@
   ),
   buildGoApplication ? pkgs.buildGoApplication,
   meta ? {},
-  pname ? "ferrisfetch",
+  pname ? "rsdoc",
   version ? "0.1",
   subPackages ? null,
 }:

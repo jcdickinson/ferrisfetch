@@ -3,7 +3,7 @@ package search
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/jcdickinson/ferrisfetch/internal/cas"
 	"github.com/jcdickinson/ferrisfetch/internal/db"
@@ -32,13 +32,13 @@ func NewSearcher(database *db.DB, voyage *embeddings.VoyageClient, model, rerank
 // Search performs vector search with reranking.
 // Operates on content hashes to deduplicate across crate versions.
 func (s *Searcher) Search(query string, crateNames []string, threshold float32, limit int, rerankInstruction string) ([]rpc.DocResult, error) {
-	log.Printf("search: query=%q threshold=%.2f limit=%d crates=%v model=%s", query, threshold, limit, crateNames, s.model)
+	slog.Info("search", "query", query, "threshold", threshold, "limit", limit, "crates", crateNames, "model", s.model)
 
 	queryEmb, err := s.voyage.EmbedSingle(query, s.model)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
 	}
-	log.Printf("search: query embedded, dimension=%d", len(queryEmb))
+	slog.Debug("query embedded", "dimension", len(queryEmb))
 
 	var crateIDs []int
 	if len(crateNames) > 0 {
@@ -46,14 +46,14 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 		if err != nil {
 			return nil, fmt.Errorf("resolving crate names: %w", err)
 		}
-		log.Printf("search: resolved crate names %v -> IDs %v", crateNames, crateIDs)
+		slog.Debug("resolved crate names", "names", crateNames, "ids", crateIDs)
 	}
 
 	candidates, err := s.db.VectorSearch(queryEmb, threshold, limit*3, crateIDs)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	log.Printf("search: vector search returned %d candidates", len(candidates))
+	slog.Debug("vector search done", "candidates", len(candidates))
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -96,7 +96,7 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 	}
 	crateMap, err := s.db.GetCratesForItems(itemIDs)
 	if err != nil {
-		log.Printf("search: batch crate lookup failed: %v", err)
+		slog.Error("batch crate lookup failed", "error", err)
 		crateMap = nil
 	}
 
@@ -119,10 +119,10 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 
 	reranked, err := s.voyage.Rerank(query, documents, s.rerankModel, limit, rerankInstruction)
 	if err != nil {
-		log.Printf("search: reranking failed (falling back to vector scores): %v", err)
+		slog.Warn("reranking failed, falling back to vector scores", "error", err)
 		reranked = nil
 	} else {
-		log.Printf("search: reranking returned %d results", len(reranked))
+		slog.Debug("reranking done", "results", len(reranked))
 	}
 
 	var results []rpc.DocResult

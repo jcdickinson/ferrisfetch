@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -45,6 +45,7 @@ func runLogs(cmd *cobra.Command, args []string) {
 	tailCmd.Stderr = os.Stderr
 
 	if err := tailCmd.Run(); err != nil {
-		log.Fatalf("tail failed: %v", err)
+		slog.Error("tail failed", "error", err)
+		os.Exit(1)
 	}
 }

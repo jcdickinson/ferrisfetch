@@ -1,25 +1,15 @@
-# Ferrisfetch
+# rsdoc
 
-A vibe-coded MCP server for semantic search of Rust crate documentation.
-
-> **Warning**: This project is completely vibe-coded. It works, but don't look too closely at the implementation details.
-
-## What is Ferrisfetch?
-
-Ferrisfetch fetches rustdoc JSON from docs.rs, parses it into markdown, vectorizes it with Voyage AI, and stores everything in DuckDB. It exposes semantic search over the indexed documentation via the Model Context Protocol (MCP).
-
-Think of it as giving your AI assistant the ability to actually read Rust documentation instead of hallucinating API signatures.
+Semantic search for Rust crate documentation. Fetches rustdoc JSON from docs.rs, parses it into markdown, vectorizes it with Voyage AI, and stores everything in SQLite with HNSW indexing.
 
 ## Features
 
-- **Automatic Documentation Fetching**: Downloads and parses rustdoc JSON directly from docs.rs
 - **Semantic Search**: Find documentation using natural language queries
-- **Backlink Graph Traversal**: Discovers related items through documentation cross-references
 - **Content-Addressable Storage**: Deduplicates docs across crate versions — re-indexing identical docs costs zero API calls
 - **Auto-Fetch on Read**: Request docs for a crate you haven't indexed yet and it fetches automatically
 - **Re-export Resolution**: Follows `pub use` chains to find canonical documentation
-- **crates.io Search**: Search for crates by name or keyword without leaving your editor
-- **Background Daemon**: Heavy work runs in a background daemon process that auto-exits after inactivity
+- **crates.io Search**: Search for crates by name or keyword
+- **Background Daemon**: Heavy work runs in a background daemon that auto-exits after inactivity
 
 ## Quick Start
 
@@ -30,25 +20,18 @@ Think of it as giving your AI assistant the ability to actually read Rust docume
 
 ### Installation
 
-#### Option 1: Download Pre-built Binary
-
-Download the latest release from [GitHub Releases](https://github.com/jcdickinson/ferrisfetch/releases).
-
-#### Option 2: Build from Source
+#### Build from Source
 
 ```bash
 git clone https://github.com/jcdickinson/ferrisfetch
 cd ferrisfetch
-go build -o ferrisfetch ./cmd/ferrisfetch
+go build -o rsdoc ./cmd/rsdoc
 ```
 
-#### Option 3: Nix
+#### Nix
 
 ```bash
-# Run directly from GitHub
 nix run github:jcdickinson/ferrisfetch
-
-# Or install to profile
 nix profile install github:jcdickinson/ferrisfetch
 ```
 
@@ -73,84 +56,48 @@ Or use environment variables:
 export FERRISFETCH_VOYAGE_AI_API_KEY="your-api-key"
 ```
 
-### MCP Client Configuration
+## Usage
 
-Add to your MCP client config (e.g. Claude Code `settings.json`):
+When `CLAUDECODE=1` or `AGENT=1` is set, `rsdoc --help` outputs markdown instructions tailored for AI agents. To make an agent aware of the tool, add a `CLI Tools` section to your `CLAUDE.md` or `AGENTS.md`:
 
-```json
-{
-  "mcpServers": {
-    "ferrisfetch": {
-      "command": "ferrisfetch"
-    }
-  }
-}
+```md
+## CLI Tools
+
+These tools are intended to be used in the same way that MCPs are. stderr is for logging and you should typically ignore it.
+
+- `rsdoc --help`: used to search for crates, as well as semantic search across indexed crates. Use this instead of fetching documentation from doc.rs.
 ```
 
-## MCP Tools
+[CLI tools typically use fewer tokens than MCPs.](https://kanyilmaz.me/2026/02/23/cli-vs-mcp.html)
 
-### `add_crates`
-
-Index one or more crates. Version defaults to "latest".
-
-```json
-{"crates": [{"name": "serde"}, {"name": "tokio", "version": "1.0"}]}
-```
-
-### `search_docs`
-
-Semantic search across indexed documentation. Returns `rsdoc://` resource URIs.
-
-```json
-{"query": "serialize a struct to JSON", "crates": ["serde", "serde_json"]}
-```
-
-### `search_crates`
-
-Search crates.io for crates by name or keyword. Shows which are already indexed locally.
-
-```json
-{"query": "async http client"}
-```
-
-## MCP Resources
-
-Search results return `rsdoc://` URIs (e.g. `rsdoc://serde/1.0.219/serde::Serialize`). Read these to get full markdown documentation for an item. Fragment suffixes like `#fields`, `#variants`, and `#implementations` give you specific sections.
-
-## CLI Commands
+### Commands
 
 ```bash
-ferrisfetch                  # Start as MCP server (default)
-ferrisfetch add serde tokio  # Index crates from the command line
-ferrisfetch search "async runtime" --crates tokio
-ferrisfetch daemon           # Run the daemon in the foreground
-ferrisfetch logs             # Tail the daemon log
-ferrisfetch status           # Check if the daemon is running
-ferrisfetch stop             # Stop the daemon
-ferrisfetch clear-cache      # Clear the version resolution cache
+rsdoc add serde tokio            # Index crates (latest version)
+rsdoc add tokio@1.44.2           # Index a specific version
+rsdoc search "async runtime"     # Semantic search
+rsdoc search-crates serde        # Search crates.io
+rsdoc get serde/latest/serde::Serialize  # Read a doc item (rsdoc:// prefix optional)
+rsdoc status                     # Show indexed crates
+rsdoc logs                       # Tail daemon log
+rsdoc stop                       # Stop the daemon
+rsdoc clear-cache                # Clear version resolution cache
 ```
 
 Use `--debug` to run the daemon in-process with visible log output.
 
 ## Architecture
 
-Ferrisfetch is a single binary that runs in two modes:
+Single binary, two modes:
 
-1. **MCP Server** (`ferrisfetch`): Communicates with your editor via stdio. Thin client that forwards requests to the daemon.
-2. **Daemon** (`ferrisfetch daemon`): Background process that does all the heavy lifting — fetching docs, generating embeddings, running searches. Communicates over a Unix socket. Auto-spawned by the MCP server if not already running, auto-exits after 10 minutes of inactivity.
+1. **CLI** (`rsdoc <command>`): Thin client that forwards requests to the daemon.
+2. **Daemon** (`rsdoc daemon`): Background process that does the heavy lifting — fetching docs, generating embeddings, running searches. Communicates over a Unix socket. Auto-spawned if not running, auto-exits after 10 minutes of inactivity.
 
 Data lives in `~/.cache/ferrisfetch/`:
-- `db.db` — DuckDB database (items, embeddings, backlinks)
+- `db.db` — SQLite database with HNSW index
 - `cas/` — Content-addressable storage for documentation markdown
 - `json/` — Cached rustdoc JSON from docs.rs
 - `daemon.log` — Daemon log output
-
-## Known Issues
-
-- No test suite (it's vibe-coded, remember?)
-- Linux only for now
-- Large crates can take a while to index on first fetch
-- The DuckDB VSS extension needs to be available on your platform
 
 ## License
 
@@ -158,7 +105,6 @@ See [LICENSE](LICENSE).
 
 ## Credits
 
-- Powered by [Voyage AI](https://voyageai.com) embeddings
-- Uses [DuckDB](https://duckdb.org) with vector similarity search
-- MCP integration via [mcp-go](https://github.com/mark3labs/mcp-go)
-- Rustdoc JSON from [docs.rs](https://docs.rs)
+- [Voyage AI](https://voyageai.com) embeddings
+- [hann](https://github.com/habedi/hann) HNSW indexing
+- [docs.rs](https://docs.rs) rustdoc JSON

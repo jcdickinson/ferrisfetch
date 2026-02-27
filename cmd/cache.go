@@ -3,7 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 
 	"github.com/jcdickinson/ferrisfetch/internal/config"
 	"github.com/jcdickinson/ferrisfetch/internal/daemon"
@@ -24,7 +25,8 @@ func runClearCache(cmd *cobra.Command, args []string) {
 	}
 
 	if err := client.ClearCache(context.Background()); err != nil {
-		log.Fatalf("failed to clear cache: %v", err)
+		slog.Error("failed to clear cache", "error", err)
+		os.Exit(1)
 	}
 	fmt.Println("version cache cleared")
 }

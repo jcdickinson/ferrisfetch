@@ -2,31 +2,32 @@ package cmd
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/jcdickinson/ferrisfetch/internal/config"
 	"github.com/jcdickinson/ferrisfetch/internal/daemon"
 	"github.com/jcdickinson/ferrisfetch/internal/db"
-	"github.com/jcdickinson/ferrisfetch/internal/mcp"
 	"github.com/spf13/cobra"
 )
+
+//go:embed agent_help.md
+var agentHelp string
 
 var debug bool
 
 var rootCmd = &cobra.Command{
-	Use:   "ferrisfetch",
-	Short: "Rust documentation semantic search MCP server",
-	Run:   runServe,
+	Use:   "rsdoc",
+	Short: "Rust documentation semantic search",
 }
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatalf("command failed: %v", err)
+		slog.Error("command failed", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -40,6 +41,20 @@ func init() {
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(clearCacheCmd)
+	rootCmd.AddCommand(searchCratesCmd)
+
+	defaultHelp := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if isAgent() {
+			fmt.Print(agentHelp)
+			return
+		}
+		defaultHelp(cmd, args)
+	})
+}
+
+func isAgent() bool {
+	return os.Getenv("CLAUDECODE") == "1" || os.Getenv("AGENT") == "1"
 }
 
 // connectDaemon returns a daemon client. In debug mode, starts the daemon
@@ -73,7 +88,7 @@ func connectDaemon() (*daemon.Client, error) {
 	srv := daemon.NewServer(cfg, database, socketPath)
 	go func() {
 		if err := srv.Start(context.Background()); err != nil {
-			log.Printf("in-process daemon error: %v", err)
+			slog.Error("in-process daemon error", "error", err)
 		}
 	}()
 
@@ -86,37 +101,4 @@ func connectDaemon() (*daemon.Client, error) {
 	}
 
 	return nil, fmt.Errorf("in-process daemon did not start within 5 seconds")
-}
-
-func runServe(cmd *cobra.Command, args []string) {
-	socketPath := config.SocketPath()
-
-	server, err := mcp.NewServer(socketPath)
-	if err != nil {
-		log.Fatalf("failed to create MCP server: %v", err)
-	}
-
-	errCh := make(chan error)
-	go func() { errCh <- server.Run() }()
-
-	if err := waitForSignal(errCh); err != nil {
-		log.Fatalf("server error: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	server.Shutdown(ctx)
-}
-
-func waitForSignal(errCh chan error) error {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case sig := <-sigs:
-		log.Printf("received signal: %s", sig)
-		return nil
-	case err := <-errCh:
-		return err
-	}
 }
