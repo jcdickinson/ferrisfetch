@@ -20,16 +20,22 @@ var addCmd = &cobra.Command{
 	Long:  `Fetch, parse, embed, and index Rust crate documentation. Version defaults to "latest".`,
 	Example: `  rsdoc add serde
   rsdoc add serde@1.0 tokio@1.0
-  rsdoc add serde serde_json tokio`,
+  rsdoc add -f serde   # force re-index`,
 	Args: cobra.MinimumNArgs(1),
 	Run:  runAdd,
+}
+
+var addForce bool
+
+func init() {
+	addCmd.Flags().BoolVarP(&addForce, "force", "f", false, "force re-index even if already processed")
 }
 
 func runAdd(cmd *cobra.Command, args []string) {
 	var specs []rpc.CrateSpec
 	for _, arg := range args {
 		name, version, _ := strings.Cut(arg, "@")
-		specs = append(specs, rpc.CrateSpec{Name: name, Version: version})
+		specs = append(specs, rpc.CrateSpec{Name: name, Version: version, Force: addForce})
 	}
 
 	client, err := connectDaemon()

@@ -8,6 +8,7 @@ type AddCratesRequest struct {
 type CrateSpec struct {
 	Name    string `json:"name"`
 	Version string `json:"version,omitempty"`
+	Force   bool   `json:"force,omitempty"`
 }
 
 // AddCratesResponse is the response body for POST /add-crates.

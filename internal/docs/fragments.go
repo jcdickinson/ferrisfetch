@@ -17,12 +17,37 @@ const (
 	FragProvidedMethods = "provided-methods"
 )
 
+// moduleCategory maps a rustdoc kind to its fragment name and heading.
+type moduleCategory struct {
+	kind     string
+	fragment string
+	heading  string
+}
+
+// moduleCategoryOrder defines the display order for module child listings,
+// matching the order used by docs.rs.
+var moduleCategoryOrder = []moduleCategory{
+	{"module", "modules", "Modules"},
+	{"macro", "macros", "Macros"},
+	{"struct", "structs", "Structs"},
+	{"enum", "enums", "Enums"},
+	{"constant", "constants", "Constants"},
+	{"trait", "traits", "Traits"},
+	{"function", "functions", "Functions"},
+	{"type_alias", "type-aliases", "Type Aliases"},
+	{"proc_macro", "proc-macros", "Proc Macros"},
+	{"proc_attribute", "attribute-macros", "Attribute Macros"},
+	{"proc_derive", "derive-macros", "Derive Macros"},
+}
+
 // GenerateFragments creates sub-documents for an item based on its kind.
 // Fragment names match docs.rs sections: #fields, #variants, #implementors,
 // #required-methods, #provided-methods, #implementations.
 func GenerateFragments(item *RustdocItem, crate *RustdocCrate, crateName, version string) []Fragment {
 	kind := innerKind(item.Inner)
 	switch kind {
+	case "module":
+		return generateModuleFragments(item, crate, crateName, version)
 	case "struct":
 		return generateStructFragments(item, crate, crateName, version)
 	case "enum":
@@ -32,6 +57,135 @@ func GenerateFragments(item *RustdocItem, crate *RustdocCrate, crateName, versio
 	default:
 		return nil
 	}
+}
+
+func generateModuleFragments(item *RustdocItem, crate *RustdocCrate, crateName, version string) []Fragment {
+	modData := unwrapInner(item.Inner, "module")
+	if modData == nil {
+		return nil
+	}
+
+	var mod struct {
+		Items []int `json:"items"`
+	}
+	if err := json.Unmarshal(modData, &mod); err != nil || len(mod.Items) == 0 {
+		return nil
+	}
+
+	modulePath := crateName
+	if summary, ok := crate.Paths[strconv.Itoa(item.ID)]; ok {
+		modulePath = strings.Join(summary.Path, "::")
+	}
+
+	// Group children by kind.
+	type childInfo struct {
+		name   string
+		uri    string
+		docs   string
+		source string // rsdoc:// URI of the canonical item, if re-exported
+	}
+	buckets := make(map[string][]childInfo)
+
+	for _, childID := range mod.Items {
+		childItem, ok := crate.Index[strconv.Itoa(childID)]
+		if !ok {
+			continue
+		}
+
+		kind := innerKind(childItem.Inner)
+
+		// For `use` items, resolve to the target item. The target may be
+		// local (in Index) or external (only in Paths). Either way, we
+		// list it under the re-exported name with a local URI.
+		if kind == "use" {
+			useData := unwrapInner(childItem.Inner, "use")
+			if useData == nil {
+				continue
+			}
+			var use struct {
+				Name string `json:"name"`
+				ID   *int  `json:"id"`
+			}
+			if err := json.Unmarshal(useData, &use); err != nil || use.ID == nil || use.Name == "" {
+				continue
+			}
+			targetSummary, ok := crate.Paths[strconv.Itoa(*use.ID)]
+			if !ok {
+				continue
+			}
+			uri := fmt.Sprintf("rsdoc://%s/%s/%s::%s", crateName, version, modulePath, use.Name)
+			first := ""
+			if target, ok := crate.Index[strconv.Itoa(*use.ID)]; ok {
+				if target.Docs != nil && *target.Docs != "" {
+					first = strings.SplitN(*target.Docs, "\n", 2)[0]
+				}
+			}
+			sourceURI := ResolveItemURI(*use.ID, crate, crateName, version)
+			buckets[targetSummary.Kind] = append(buckets[targetSummary.Kind], childInfo{
+				name: use.Name, uri: uri, docs: first, source: sourceURI,
+			})
+			continue
+		}
+
+		if kind == "impl" || kind == "" {
+			continue
+		}
+		if childItem.Name == nil {
+			continue
+		}
+		// Skip external items — only list items defined in this crate.
+		idStr := strconv.Itoa(childID)
+		if summary, ok := crate.Paths[idStr]; ok && summary.CrateID != 0 {
+			continue
+		}
+		uri := ResolveItemURI(childID, crate, crateName, version)
+		if uri == "" {
+			continue
+		}
+		first := ""
+		if childItem.Docs != nil && *childItem.Docs != "" {
+			first = strings.SplitN(*childItem.Docs, "\n", 2)[0]
+		}
+		buckets[kind] = append(buckets[kind], childInfo{
+			name: *childItem.Name,
+			uri:  uri,
+			docs: first,
+		})
+	}
+
+	var fragments []Fragment
+	for _, cat := range moduleCategoryOrder {
+		children := buckets[cat.kind]
+		if len(children) == 0 {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# %s\n\n", cat.heading)
+		for _, c := range children {
+			fmt.Fprintf(&b, "- [%s](%s)", c.name, c.uri)
+			if c.source != "" && c.source != c.uri {
+				fmt.Fprintf(&b, " (from [%s](%s))", sourceLabel(c.source), c.source)
+			}
+			if c.docs != "" {
+				b.WriteString(": " + c.docs)
+			}
+			b.WriteString("\n")
+		}
+		fragments = append(fragments, Fragment{Name: cat.fragment, Content: b.String()})
+	}
+
+	return fragments
+}
+
+// sourceLabel extracts "crate::path" from an rsdoc:// URI for display.
+func sourceLabel(uri string) string {
+	// rsdoc://crate/version/crate::path → crate::path
+	rest := strings.TrimPrefix(uri, "rsdoc://")
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) == 3 {
+		return parts[2]
+	}
+	return uri
 }
 
 func generateStructFragments(item *RustdocItem, crate *RustdocCrate, crateName, version string) []Fragment {

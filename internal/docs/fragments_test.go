@@ -220,6 +220,222 @@ func TestGenerateFragments_TraitTypesUsed(t *testing.T) {
 	}
 }
 
+func TestGenerateFragments_Module(t *testing.T) {
+	t.Parallel()
+
+	items := map[string]RustdocItem{
+		// Module item (the module under test)
+		"0": {ID: 0, Name: strPtr("mymod"),
+			Inner: json.RawMessage(`{"module":{"items":[1,2,3,4,5,6]}}`)},
+		// Child struct
+		"1": {ID: 1, Name: strPtr("Foo"), Docs: strPtr("A foo struct"),
+			Inner: json.RawMessage(`{"struct":{}}`)},
+		// Child enum
+		"2": {ID: 2, Name: strPtr("Bar"), Docs: strPtr("A bar enum"),
+			Inner: json.RawMessage(`{"enum":{}}`)},
+		// Child function
+		"3": {ID: 3, Name: strPtr("baz"),
+			Inner: json.RawMessage(`{"function":{}}`)},
+		// Child impl (should be skipped)
+		"4": {ID: 4, Inner: json.RawMessage(`{"impl":{}}`)},
+		// Child use (should be skipped)
+		"5": {ID: 5, Name: strPtr("reexport"),
+			Inner: json.RawMessage(`{"use":{}}`)},
+		// Child submodule
+		"6": {ID: 6, Name: strPtr("sub"), Docs: strPtr("A submodule"),
+			Inner: json.RawMessage(`{"module":{"items":[]}}`)},
+	}
+	crate := &RustdocCrate{
+		Index:          items,
+		ExternalCrates: map[string]ExternalCrate{},
+		Paths: map[string]RustdocSummary{
+			"1": {CrateID: 0, Path: []string{"mycrate", "mymod", "Foo"}, Kind: "struct"},
+			"2": {CrateID: 0, Path: []string{"mycrate", "mymod", "Bar"}, Kind: "enum"},
+			"3": {CrateID: 0, Path: []string{"mycrate", "mymod", "baz"}, Kind: "function"},
+			"6": {CrateID: 0, Path: []string{"mycrate", "mymod", "sub"}, Kind: "module"},
+		},
+	}
+
+	item := items["0"]
+	fragments := GenerateFragments(&item, crate, "mycrate", "1.0.0")
+
+	fragsByName := map[string]string{}
+	for _, f := range fragments {
+		fragsByName[f.Name] = f.Content
+	}
+
+	// Should have modules, structs, enums, functions
+	if _, ok := fragsByName["modules"]; !ok {
+		t.Error("expected modules fragment")
+	}
+	if _, ok := fragsByName["structs"]; !ok {
+		t.Error("expected structs fragment")
+	}
+	if _, ok := fragsByName["enums"]; !ok {
+		t.Error("expected enums fragment")
+	}
+	if _, ok := fragsByName["functions"]; !ok {
+		t.Error("expected functions fragment")
+	}
+
+	// Should NOT have impl or use fragments
+	if len(fragments) != 4 {
+		t.Errorf("expected 4 fragments, got %d: %v", len(fragments), fragsByName)
+	}
+
+	// Check content format: links with rsdoc URIs
+	structs := fragsByName["structs"]
+	if !strings.Contains(structs, "[Foo](rsdoc://mycrate/1.0.0/mycrate::mymod::Foo)") {
+		t.Errorf("structs fragment missing Foo link: %s", structs)
+	}
+	if !strings.Contains(structs, ": A foo struct") {
+		t.Errorf("structs fragment missing Foo docs: %s", structs)
+	}
+
+	// Check ordering: modules should come before structs
+	var moduleIdx, structIdx int
+	for i, f := range fragments {
+		if f.Name == "modules" {
+			moduleIdx = i
+		}
+		if f.Name == "structs" {
+			structIdx = i
+		}
+	}
+	if moduleIdx > structIdx {
+		t.Errorf("modules fragment should come before structs")
+	}
+}
+
+func TestGenerateFragments_Module_ResolvesUseItems(t *testing.T) {
+	t.Parallel()
+
+	// Root module re-exports items via `pub use`.
+	items := map[string]RustdocItem{
+		"0": {ID: 0, Name: strPtr("mycrate"),
+			Inner: json.RawMessage(`{"module":{"items":[1,2]}}`)},
+		// use item: pub use internal::Foo;
+		"1": {ID: 1, Name: strPtr("Foo"),
+			Inner: json.RawMessage(`{"use":{"id":10,"name":"Foo","is_glob":false}}`)},
+		// use item: pub use internal::bar;
+		"2": {ID: 2, Name: strPtr("bar"),
+			Inner: json.RawMessage(`{"use":{"id":11,"name":"bar","is_glob":false}}`)},
+		// Target items (in submodule)
+		"10": {ID: 10, Name: strPtr("Foo"), Docs: strPtr("A foo struct"),
+			Inner: json.RawMessage(`{"struct":{}}`)},
+		"11": {ID: 11, Name: strPtr("bar"), Docs: strPtr("A bar function"),
+			Inner: json.RawMessage(`{"function":{}}`)},
+	}
+	crate := &RustdocCrate{
+		Index:          items,
+		ExternalCrates: map[string]ExternalCrate{},
+		Paths: map[string]RustdocSummary{
+			"0":  {CrateID: 0, Path: []string{"mycrate"}, Kind: "module"},
+			"10": {CrateID: 0, Path: []string{"mycrate", "Foo"}, Kind: "struct"},
+			"11": {CrateID: 0, Path: []string{"mycrate", "bar"}, Kind: "function"},
+		},
+	}
+
+	item := items["0"]
+	fragments := GenerateFragments(&item, crate, "mycrate", "1.0.0")
+
+	fragsByName := map[string]string{}
+	for _, f := range fragments {
+		fragsByName[f.Name] = f.Content
+	}
+
+	if _, ok := fragsByName["structs"]; !ok {
+		t.Error("expected structs fragment from resolved use item")
+	}
+	if _, ok := fragsByName["functions"]; !ok {
+		t.Error("expected functions fragment from resolved use item")
+	}
+	// URI is built from module path + use name (local path)
+	if !strings.Contains(fragsByName["structs"], "[Foo](rsdoc://mycrate/1.0.0/mycrate::Foo)") {
+		t.Errorf("expected Foo link in structs: %s", fragsByName["structs"])
+	}
+	if !strings.Contains(fragsByName["structs"], ": A foo struct") {
+		t.Errorf("expected Foo docs in structs: %s", fragsByName["structs"])
+	}
+}
+
+func TestGenerateFragments_Module_ResolvesExternalUseItems(t *testing.T) {
+	t.Parallel()
+
+	// Root module re-exports an item from an external crate (not in Index).
+	items := map[string]RustdocItem{
+		"2": {ID: 2, Name: strPtr("mycrate"),
+			Inner: json.RawMessage(`{"module":{"items":[0]}}`)},
+		// use item: pub use dep_macro::my_macro; (Name is nil on the index entry)
+		"0": {ID: 0,
+			Inner: json.RawMessage(`{"use":{"source":"dep_macro::my_macro","name":"my_macro","id":1,"is_glob":false}}`)},
+		// Target item 1 is NOT in index (external crate item)
+	}
+	crate := &RustdocCrate{
+		Index:          items,
+		ExternalCrates: map[string]ExternalCrate{"20": {Name: "dep_macro"}},
+		Paths: map[string]RustdocSummary{
+			"2": {CrateID: 0, Path: []string{"mycrate"}, Kind: "module"},
+			"1": {CrateID: 20, Path: []string{"dep_macro", "my_macro"}, Kind: "proc_attribute"},
+		},
+	}
+
+	item := items["2"]
+	fragments := GenerateFragments(&item, crate, "mycrate", "1.0.0")
+
+	if len(fragments) != 1 {
+		t.Fatalf("expected 1 fragment, got %d", len(fragments))
+	}
+	f := fragments[0]
+	if f.Name != "attribute-macros" {
+		t.Errorf("expected attribute-macros fragment, got %s", f.Name)
+	}
+	// URI should use local path, not external crate path
+	if !strings.Contains(f.Content, "[my_macro](rsdoc://mycrate/1.0.0/mycrate::my_macro)") {
+		t.Errorf("expected local URI for re-exported macro: %s", f.Content)
+	}
+	// Should indicate source with a link
+	if !strings.Contains(f.Content, "(from [dep_macro::my_macro](rsdoc://dep_macro/latest/dep_macro::my_macro))") {
+		t.Errorf("expected source annotation: %s", f.Content)
+	}
+}
+
+func TestGenerateFragments_Module_SkipsExternal(t *testing.T) {
+	t.Parallel()
+
+	items := map[string]RustdocItem{
+		"0": {ID: 0, Name: strPtr("mymod"),
+			Inner: json.RawMessage(`{"module":{"items":[1,2]}}`)},
+		// Local item
+		"1": {ID: 1, Name: strPtr("Local"),
+			Inner: json.RawMessage(`{"struct":{}}`)},
+		// External item (CrateID != 0)
+		"2": {ID: 2, Name: strPtr("External"),
+			Inner: json.RawMessage(`{"struct":{}}`)},
+	}
+	crate := &RustdocCrate{
+		Index:          items,
+		ExternalCrates: map[string]ExternalCrate{},
+		Paths: map[string]RustdocSummary{
+			"1": {CrateID: 0, Path: []string{"mycrate", "mymod", "Local"}, Kind: "struct"},
+			"2": {CrateID: 5, Path: []string{"othercrate", "External"}, Kind: "struct"},
+		},
+	}
+
+	item := items["0"]
+	fragments := GenerateFragments(&item, crate, "mycrate", "1.0.0")
+
+	if len(fragments) != 1 {
+		t.Fatalf("expected 1 fragment, got %d", len(fragments))
+	}
+	if !strings.Contains(fragments[0].Content, "Local") {
+		t.Errorf("expected Local in fragment: %s", fragments[0].Content)
+	}
+	if strings.Contains(fragments[0].Content, "External") {
+		t.Errorf("external item should be excluded: %s", fragments[0].Content)
+	}
+}
+
 func TestGenerateFragments_UnknownKind(t *testing.T) {
 	t.Parallel()
 

@@ -267,56 +267,58 @@ func (s *Server) addCrate(spec rpc.CrateSpec, progress func(string)) rpc.CrateRe
 
 	result := rpc.CrateResult{Name: spec.Name, Version: version}
 
-	// Check version cache for "latest" requests
-	if version == "latest" {
-		if entry, ok := s.getCachedVersion(spec.Name); ok {
-			if entry.notFound {
-				result.Error = fmt.Sprintf("crate %s not found on docs.rs (cached)", spec.Name)
+	if !spec.Force {
+		// Check version cache for "latest" requests
+		if version == "latest" {
+			if entry, ok := s.getCachedVersion(spec.Name); ok {
+				if entry.notFound {
+					result.Error = fmt.Sprintf("crate %s not found on docs.rs (cached)", spec.Name)
+					return result
+				}
+				// Use cached real version — check DB
+				existing, err := s.db.GetCrate(spec.Name, entry.version)
+				if err != nil {
+					result.Error = err.Error()
+					return result
+				}
+				if existing != nil && existing.ProcessedAt != nil {
+					result.Version = existing.Version
+					result.Items, _ = s.db.CountItems(existing.ID)
+					return result
+				}
+			}
+		}
+
+		// For "latest", check if we already have any processed version in DB
+		if version == "latest" {
+			existing, err := s.db.GetLatestCrate(spec.Name)
+			if err != nil {
+				result.Error = err.Error()
 				return result
 			}
-			// Use cached real version — check DB
-			existing, err := s.db.GetCrate(spec.Name, entry.version)
+			if existing != nil {
+				result.Version = existing.Version
+				result.Items, _ = s.db.CountItems(existing.ID)
+				return result
+			}
+		} else {
+			// Exact version: check if already processed
+			existing, err := s.db.GetCrate(spec.Name, version)
 			if err != nil {
 				result.Error = err.Error()
 				return result
 			}
 			if existing != nil && existing.ProcessedAt != nil {
-				result.Version = existing.Version
 				result.Items, _ = s.db.CountItems(existing.ID)
 				return result
 			}
 		}
 	}
 
-	// For "latest", check if we already have any processed version in DB
-	if version == "latest" {
-		existing, err := s.db.GetLatestCrate(spec.Name)
-		if err != nil {
-			result.Error = err.Error()
-			return result
-		}
-		if existing != nil {
-			result.Version = existing.Version
-			result.Items, _ = s.db.CountItems(existing.ID)
-			return result
-		}
-	} else {
-		// Exact version: check if already processed
-		existing, err := s.db.GetCrate(spec.Name, version)
-		if err != nil {
-			result.Error = err.Error()
-			return result
-		}
-		if existing != nil && existing.ProcessedAt != nil {
-			result.Items, _ = s.db.CountItems(existing.ID)
-			return result
-		}
-	}
-
 	// Singleflight: dedup concurrent fetches for the same crate@version
 	key := spec.Name + "@" + version
 	v, _, _ := s.addCrateGroup.Do(key, func() (interface{}, error) {
-		return s.addCrateWork(spec.Name, version, progress), nil
+		return s.addCrateWork(spec.Name, version, spec.Force, progress), nil
 	})
 	return v.(rpc.CrateResult)
 }
@@ -327,7 +329,7 @@ type embeddable struct {
 	docLinks    map[string]string // only set for main item docs
 }
 
-func (s *Server) addCrateWork(name, version string, progress func(string)) rpc.CrateResult {
+func (s *Server) addCrateWork(name, version string, force bool, progress func(string)) rpc.CrateResult {
 	result := rpc.CrateResult{Name: name, Version: version}
 
 	realVersion, rustdocCrate, items, err := s.resolveVersion(name, version, progress)
@@ -337,7 +339,7 @@ func (s *Server) addCrateWork(name, version string, progress func(string)) rpc.C
 	}
 
 	// Check if this resolved version is already processed
-	if realVersion != version {
+	if !force && realVersion != version {
 		existing, err := s.db.GetCrate(name, realVersion)
 		if err != nil {
 			result.Error = err.Error()
