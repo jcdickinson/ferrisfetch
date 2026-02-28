@@ -39,7 +39,7 @@ rsdoc search --crate serde "derive macro"
 
 ### `rsdoc search-crates <query>`
 
-Search crates.io for Rust crates by name or keyword. Results indicate which crates are already indexed locally.
+Search crates.io for Rust crates by name or keyword. Results indicate which crates are already indexed locally. Note that documentation can lag behind crate releases.
 
 ```
 rsdoc search-crates "async http client"
