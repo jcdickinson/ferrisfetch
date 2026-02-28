@@ -53,7 +53,7 @@ func runGet(cmd *cobra.Command, args []string) {
 	}
 
 	if path == "" {
-		path = crate + "::" + crate
+		path = crate
 		fmt.Printf("note: no path given, assuming %s/%s/%s\n\n", crate, version, path)
 	}
 	var fragment string

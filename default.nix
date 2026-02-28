@@ -14,7 +14,7 @@
   meta ? {},
   pname ? "rsdoc",
   version ? "0.1",
-  subPackages ? null,
+  subPackages ? [ "cmd/rsdoc" ],
 }:
 buildGoApplication {
   inherit meta pname version subPackages;
