@@ -1,4 +1,4 @@
-# rsdoc — Rust Documentation Search
+# `rsdoc` — Rust Documentation Search
 
 rsdoc indexes Rust crate documentation from docs.rs and provides semantic search. Use it instead of fetching documentation manually.
 

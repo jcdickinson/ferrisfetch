@@ -42,6 +42,7 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(clearCacheCmd)
 	rootCmd.AddCommand(searchCratesCmd)
+	rootCmd.AddCommand(mcpCmd)
 
 	defaultHelp := rootCmd.HelpFunc()
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
