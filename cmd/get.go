@@ -16,9 +16,11 @@ var getCmd = &cobra.Command{
 	Short: "Read a documentation item by URI",
 	Example: `  rsdoc get rsdoc://serde/latest/serde::Serialize
   rsdoc get rsdoc://tokio/1.0.0/tokio::spawn
-  rsdoc get serde/latest/serde::Serialize`,
-	Args: cobra.ExactArgs(1),
-	Run:  runGet,
+  rsdoc get serde/latest/serde::Serialize
+  rsdoc get serde@1.0.0/serde::Serialize`,
+	Aliases: []string{"read"},
+	Args:    cobra.ExactArgs(1),
+	Run:     runGet,
 }
 
 func init() {
@@ -27,13 +29,33 @@ func init() {
 
 func runGet(cmd *cobra.Command, args []string) {
 	uri := strings.TrimPrefix(args[0], "rsdoc://")
-	parts := strings.SplitN(uri, "/", 3)
-	if len(parts) < 3 {
-		slog.Error("invalid URI: need crate/version/path")
-		os.Exit(1)
+
+	// Support crate@version/path as alternative to crate/version/path
+	var crate, version, path string
+	if idx := strings.Index(uri, "@"); idx >= 0 {
+		crate = uri[:idx]
+		rest := strings.SplitN(uri[idx+1:], "/", 2)
+		version = rest[0]
+		if len(rest) == 2 {
+			path = rest[1]
+		}
+	} else {
+		parts := strings.SplitN(uri, "/", 3)
+		if len(parts) < 2 {
+			slog.Error("invalid URI: need crate/version/path or crate@version/path")
+			os.Exit(1)
+		}
+		crate = parts[0]
+		version = parts[1]
+		if len(parts) == 3 {
+			path = parts[2]
+		}
 	}
 
-	path := parts[2]
+	if path == "" {
+		path = crate + "::" + crate
+		fmt.Printf("note: no path given, assuming %s/%s/%s\n\n", crate, version, path)
+	}
 	var fragment string
 	if idx := strings.LastIndex(path, "#"); idx >= 0 {
 		fragment = path[idx+1:]
@@ -47,8 +69,8 @@ func runGet(cmd *cobra.Command, args []string) {
 	}
 
 	resp, err := client.GetDoc(context.Background(), rpc.GetDocRequest{
-		Crate:    parts[0],
-		Version:  parts[1],
+		Crate:    crate,
+		Version:  version,
 		Path:     path,
 		Fragment: fragment,
 	})
