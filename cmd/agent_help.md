@@ -11,10 +11,11 @@ rsdoc indexes Rust crate documentation from docs.rs and provides semantic search
 
 ## Workflow
 
-1. Use `rsdoc search-crates <query>` to find crates by name or keyword if you're not sure what's available
-2. Use `rsdoc add <crate[@version]>` to index the crates relevant to your task (version defaults to "latest")
-3. Use `rsdoc search <query>` to find relevant items with natural language queries
-4. Use `rsdoc get <uri>` to read the returned `rsdoc://` URIs for full documentation
+1. Use `rsdoc info <crate>` to check crate metadata, latest version, and links
+2. Use `rsdoc search-crates <query>` to find crates by name or keyword if you're not sure what's available
+3. Use `rsdoc add <crate[@version]>` to index the crates relevant to your task (version defaults to "latest")
+4. Use `rsdoc search <query>` to find relevant items with natural language queries
+5. Use `rsdoc get <uri>` to read the returned `rsdoc://` URIs for full documentation
 
 ## Commands
 
@@ -52,9 +53,32 @@ Read a specific documentation item by URI. The `rsdoc://` prefix is optional and
 ```
 rsdoc get serde/latest/serde::Serialize
 rsdoc get tokio/1.44.2/tokio::spawn
-rsdoc get serde/1.0.219/serde::Serialize#implementations
+rsdoc get serde/1.0.219/serde::Serialize%implementations
+```
+
+### `rsdoc info <crate[@version]>`
+
+Show crate metadata from crates.io (license, MSRV, downloads, links, keywords). No daemon needed.
+
+```
+rsdoc info serde
+rsdoc info tokio@1.44.2
+```
+
+### `rsdoc which <crate> --with dep@ver`
+
+Find crate versions whose dependencies are compatible with specific versions. Useful for finding which version of a crate to use with a given dependency version.
+
+- `--with dep@ver` — dependency constraint (repeatable)
+- `--newer-than X.Y.Z` — minimum version bound (inclusive)
+- `--older-than X.Y.Z` — maximum version bound (inclusive)
+
+```
+rsdoc which tokio --with mio@1.0.0
+rsdoc which tokio --with mio@1.0.0 --older-than 1.40.0
+rsdoc which serde --with serde_derive@1.0 --newer-than 1.0.100
 ```
 
 ## URIs
 
-Search results return `rsdoc://` URIs (e.g. `rsdoc://serde/1.0.219/serde::Serialize`). Read these with `rsdoc get` — the `rsdoc://` prefix can be omitted. Fragment suffixes like `#fields`, `#variants`, and `#implementations` return specific sections of an item's documentation.
+Search results return `rsdoc://` URIs (e.g. `rsdoc://serde/1.0.219/serde::Serialize`). Read these with `rsdoc get` — the `rsdoc://` prefix can be omitted. Fragment suffixes like `%fields`, `%variants`, and `%implementations` return specific sections of an item's documentation. Use `%` as the fragment separator, even if you are provided a link with `#`.

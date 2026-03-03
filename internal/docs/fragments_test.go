@@ -31,8 +31,8 @@ func TestGenerateFragments_Struct(t *testing.T) {
 	crate := makeCrateWithItems(items)
 
 	item := &RustdocItem{
-		ID:   0,
-		Name: strPtr("Point"),
+		ID:    0,
+		Name:  strPtr("Point"),
 		Inner: json.RawMessage(`{"struct":{"kind":{"plain":{"fields":[1,2]}},"impls":[10]}}`),
 	}
 
@@ -112,8 +112,8 @@ func TestGenerateFragments_Trait(t *testing.T) {
 	crate.Paths["30"] = RustdocSummary{CrateID: 0, Path: []string{"mycrate", "Foo"}, Kind: "struct"}
 
 	item := &RustdocItem{
-		ID:   0,
-		Name: strPtr("MyTrait"),
+		ID:    0,
+		Name:  strPtr("MyTrait"),
 		Inner: json.RawMessage(`{"trait":{"items":[1,2],"implementations":[20],"impls":[]}}`),
 	}
 

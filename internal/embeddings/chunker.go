@@ -18,9 +18,9 @@ type Chunk struct {
 // every chunk carries the item's identity (path + signature).
 //
 // Additionally:
-// - The first paragraph (summary line) is emitted as a standalone chunk
-//   for double representation in vector space.
-// - Fenced code blocks >= 80 chars are extracted as standalone chunks.
+//   - The first paragraph (summary line) is emitted as a standalone chunk
+//     for double representation in vector space.
+//   - Fenced code blocks >= 80 chars are extracted as standalone chunks.
 //
 // No max size enforcement — Voyage.ai truncates if needed.
 func ChunkSections(preamble, markdown string) []Chunk {

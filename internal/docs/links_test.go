@@ -80,7 +80,7 @@ and [serde](https://docs.rs/serde/latest/serde/) for more info.`
 
 	want := map[string]string{
 		"https://docs.rs/serde/latest/serde/ser/trait.Serialize.html": "rsdoc://serde/latest/serde::ser::Serialize",
-		"https://docs.rs/serde/latest/serde/":                        "rsdoc://serde/latest/serde",
+		"https://docs.rs/serde/latest/serde/":                         "rsdoc://serde/latest/serde",
 	}
 
 	for k, v := range want {

@@ -57,7 +57,10 @@ func runGet(cmd *cobra.Command, args []string) {
 		fmt.Printf("note: no path given, assuming %s/%s/%s\n\n", crate, version, path)
 	}
 	var fragment string
-	if idx := strings.LastIndex(path, "#"); idx >= 0 {
+	if idx := strings.LastIndex(path, "%"); idx >= 0 {
+		fragment = path[idx+1:]
+		path = path[:idx]
+	} else if idx := strings.LastIndex(path, "#"); idx >= 0 {
 		fragment = path[idx+1:]
 		path = path[:idx]
 	}
@@ -69,10 +72,11 @@ func runGet(cmd *cobra.Command, args []string) {
 	}
 
 	resp, err := client.GetDoc(context.Background(), rpc.GetDocRequest{
-		Crate:    crate,
-		Version:  version,
-		Path:     path,
-		Fragment: fragment,
+		Crate:     crate,
+		Version:   version,
+		Path:      path,
+		Fragment:  fragment,
+		AgentMode: isAgent(),
 	})
 	if err != nil {
 		slog.Error("get doc failed", "error", err)

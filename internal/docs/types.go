@@ -4,12 +4,12 @@ import "encoding/json"
 
 // RustdocCrate is the top-level structure of rustdoc JSON output.
 type RustdocCrate struct {
-	Root           int                        `json:"root"`
-	CrateVersion   *string                    `json:"crate_version"`
-	Index          map[string]RustdocItem     `json:"index"`
-	Paths          map[string]RustdocSummary  `json:"paths"`
-	ExternalCrates map[string]ExternalCrate   `json:"external_crates"`
-	FormatVersion  int                        `json:"format_version"`
+	Root           int                       `json:"root"`
+	CrateVersion   *string                   `json:"crate_version"`
+	Index          map[string]RustdocItem    `json:"index"`
+	Paths          map[string]RustdocSummary `json:"paths"`
+	ExternalCrates map[string]ExternalCrate  `json:"external_crates"`
+	FormatVersion  int                       `json:"format_version"`
 }
 
 // ExternalCrate identifies a dependency crate by name.

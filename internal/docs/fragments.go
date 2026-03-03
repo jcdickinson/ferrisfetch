@@ -104,7 +104,7 @@ func generateModuleFragments(item *RustdocItem, crate *RustdocCrate, crateName, 
 			}
 			var use struct {
 				Name string `json:"name"`
-				ID   *int  `json:"id"`
+				ID   *int   `json:"id"`
 			}
 			if err := json.Unmarshal(useData, &use); err != nil || use.ID == nil || use.Name == "" {
 				continue

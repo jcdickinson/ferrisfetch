@@ -763,9 +763,13 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 	if item.FragmentNames != "" {
 		var fragNames []string
 		if json.Unmarshal([]byte(item.FragmentNames), &fragNames) == nil && len(fragNames) > 0 {
+			sep := "#"
+			if req.AgentMode {
+				sep = "%"
+			}
 			fragURIs := make(map[string]string, len(fragNames))
 			for _, name := range fragNames {
-				fragURIs[name] = fmt.Sprintf("rsdoc://%s/%s/%s#%s", req.Crate, crate.Version, req.Path, name)
+				fragURIs[name] = fmt.Sprintf("rsdoc://%s/%s/%s%s%s", req.Crate, crate.Version, req.Path, sep, name)
 			}
 			text = md.AddFrontMatter(text, fragURIs)
 		}

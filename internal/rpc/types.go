@@ -56,10 +56,11 @@ type DocResult struct {
 
 // GetDocRequest is the request body for POST /get-doc.
 type GetDocRequest struct {
-	Crate    string `json:"crate"`
-	Version  string `json:"version"`
-	Path     string `json:"path"`
-	Fragment string `json:"fragment,omitempty"`
+	Crate     string `json:"crate"`
+	Version   string `json:"version"`
+	Path      string `json:"path"`
+	Fragment  string `json:"fragment,omitempty"`
+	AgentMode bool   `json:"agent_mode,omitempty"`
 }
 
 // GetDocResponse is the response body for POST /get-doc.
