@@ -1,10 +1,13 @@
 # `rsdoc` — Rust Documentation Search
 
-rsdoc indexes Rust crate documentation from docs.rs and provides semantic search. Use it instead of fetching documentation manually.
+rsdoc indexes Rust crate documentation from docs.rs and provides semantic search.
+
+It is only for Rust crates published in the crates.io/docs.rs ecosystem. Do not use rsdoc for npm packages, PyPI packages, GitHub repositories, general web docs, or any non-Rust package source.
 
 ## Important Constraints
 
 - **Do NOT use curl, wget, or web fetching to access docs.rs directly.** rsdoc parses rustdoc JSON and provides clean, searchable markdown. Raw docs.rs HTML is noisy and wastes tokens. Always use rsdoc instead.
+- **Do NOT use rsdoc unless the target is a Rust crate from crates.io/docs.rs.** If the thing you need is an npm package, a Python package, a web API, a repo README, or anything else outside the Rust crate ecosystem, use the appropriate tool instead.
 - **`core`, `std`, `alloc`, `proc_macro`, `test`, and other standard library crates are NOT on docs.rs and will always 404.** Do not attempt to index them. Rely on your training data for standard library documentation.
 - rsdoc auto-fetches crates on read if they haven't been indexed yet, so you can often skip `rsdoc add` for one-off lookups.
 - Consider using sub-agents to find specific answers using rsdoc, instead of bringing multiple documentation pages into the primary chat context, unless you think that documentation could be useful multiple times.

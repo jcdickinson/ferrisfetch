@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 )
@@ -18,14 +20,25 @@ var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Run as MCP server (publishes CLI instructions only)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := binaryName()
-		instructions := fmt.Sprintf(mcpPrelude, name) + agentHelp
+		instructions := usageInstructions()
 
 		s := server.NewMCPServer("rsdoc", "1.0.0",
 			server.WithInstructions(instructions),
 		)
+		s.AddTool(
+			mcp.NewTool("usage",
+				mcp.WithDescription("Return the server usage instructions. Read this first. rsdoc only applies to Rust crates from crates.io/docs.rs, not npm or other ecosystems."),
+			),
+			func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return mcp.NewToolResultText(instructions), nil
+			},
+		)
 		return server.ServeStdio(s)
 	},
+}
+
+func usageInstructions() string {
+	return fmt.Sprintf(mcpPrelude, binaryName()) + agentHelp
 }
 
 // binaryName returns "rsdoc" if it's in PATH and points to the current binary,
