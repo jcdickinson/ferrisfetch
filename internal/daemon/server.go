@@ -98,6 +98,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /add-crates", s.withExpReset(s.handleAddCrates))
 	mux.HandleFunc("POST /search", s.withExpReset(s.handleSearch))
 	mux.HandleFunc("POST /get-doc", s.withExpReset(s.handleGetDoc))
+	mux.HandleFunc("POST /list-uris", s.withExpReset(s.handleListURIs))
 	mux.HandleFunc("GET /status", s.withExpReset(s.handleStatus))
 	mux.HandleFunc("POST /search-crates", s.withExpReset(s.handleSearchCrates))
 	mux.HandleFunc("POST /clear-cache", s.withExpReset(s.handleClearCache))
@@ -675,10 +676,20 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := s.db.GetItemByPath(crate.ID, req.Path)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	// Try the path as given, then docs.rs-style fallbacks (slashes → ::,
+	// stripped `kind.Name` prefixes, prepended lib name).
+	var item *db.Item
+	for _, candidate := range docs.CanonicalizePaths(req.Path, crate.Name) {
+		it, err := s.db.GetItemByPath(crate.ID, candidate)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if it != nil {
+			item = it
+			req.Path = candidate
+			break
+		}
 	}
 
 	// If not found, check re-export mappings and redirect to the source crate
@@ -776,6 +787,49 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, rpc.GetDocResponse{Markdown: text})
+}
+
+func (s *Server) handleListURIs(w http.ResponseWriter, r *http.Request) {
+	var req rpc.ListURIsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	crate, err := s.resolveOrFetchCrate(req.Crate, req.Version)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if crate == nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("crate %s@%s not found", req.Crate, req.Version))
+		return
+	}
+
+	items, err := s.db.ListItemsByCrate(crate.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := rpc.ListURIsResponse{
+		Crate:   crate.Name,
+		Version: crate.Version,
+		Items:   make([]rpc.URIItem, 0, len(items)),
+	}
+	for _, it := range items {
+		uri := fmt.Sprintf("rsdoc://%s/%s/%s", crate.Name, crate.Version, it.Path)
+		entry := rpc.URIItem{URI: uri, Kind: it.Kind}
+		if it.FragmentNames != "" {
+			var frags []string
+			if json.Unmarshal([]byte(it.FragmentNames), &frags) == nil {
+				entry.Fragments = frags
+			}
+		}
+		resp.Items = append(resp.Items, entry)
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

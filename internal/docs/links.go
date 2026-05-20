@@ -78,6 +78,79 @@ func extractDocsRsCrateName(rootURL string) string {
 	return m[1]
 }
 
+// CanonicalizePaths returns candidate canonical item paths to try for a
+// user-supplied path. Always includes the original first. Adds normalized forms
+// that translate docs.rs URL conventions back to Rust paths:
+//
+//   - `/` separators rewritten to `::`
+//   - `kind.Name` segments (e.g. `enum.Foo`, `struct.Bar`) stripped to `Name`
+//   - lib-name prefix (Cargo name with `-` → `_`) prepended when missing
+//
+// Examples for crate `openrouter-rs`:
+//
+//	types/stream/enum.StreamEvent → openrouter_rs::types::stream::StreamEvent
+//	openrouter_rs::types::stream::StreamEvent → unchanged (returned first)
+func CanonicalizePaths(path, crateName string) []string {
+	candidates := []string{path}
+	seen := map[string]bool{path: true}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		candidates = append(candidates, p)
+	}
+
+	libName := strings.ReplaceAll(crateName, "-", "_")
+
+	// Normalize: slashes → ::, then strip kind. prefix from each segment.
+	normalized := strings.ReplaceAll(path, "/", "::")
+	if normalized != path {
+		add(normalized)
+	}
+
+	segments := strings.Split(normalized, "::")
+	stripped := false
+	for i, seg := range segments {
+		if dot := strings.IndexByte(seg, '.'); dot >= 0 {
+			segments[i] = seg[dot+1:]
+			stripped = true
+		}
+	}
+	if stripped {
+		add(strings.Join(segments, "::"))
+	}
+
+	// Prepend lib name if missing.
+	if libName != "" {
+		joined := strings.Join(segments, "::")
+		if joined != libName && !strings.HasPrefix(joined, libName+"::") {
+			add(libName + "::" + joined)
+		}
+	}
+
+	return candidates
+}
+
+// DocsRsURLToRsdocURI converts a docs.rs documentation URL into an rsdoc://
+// URI suitable for `rsdoc get`. Forwards any fragment unchanged — if it
+// doesn't match an rsdoc fragment, the lookup will 404 with a clear error.
+//
+// Returns "" if the input isn't a docs.rs URL.
+func DocsRsURLToRsdocURI(input string) string {
+	if !strings.HasPrefix(input, "https://docs.rs/") && !strings.HasPrefix(input, "http://docs.rs/") {
+		return ""
+	}
+	base := docsRsToRsdoc(input)
+	if base == "" {
+		return ""
+	}
+	if hashIdx := strings.Index(input, "#"); hashIdx >= 0 && hashIdx < len(input)-1 {
+		return base + "#" + input[hashIdx+1:]
+	}
+	return base
+}
+
 // docsRsRe matches docs.rs documentation URLs in markdown text.
 // Captures everything up to whitespace or markdown link delimiters.
 var docsRsRe = regexp.MustCompile(`https?://docs\.rs/[^\s)\]>]+`)

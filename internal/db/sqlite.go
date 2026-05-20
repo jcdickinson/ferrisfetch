@@ -304,6 +304,30 @@ func (db *DB) GetItemByPath(crateID int, path string) (*Item, error) {
 	return &it, nil
 }
 
+// ListItemsByCrate returns all items in a crate, ordered by path.
+// Only fills ID, Path, Kind, and FragmentNames — enough to build URIs.
+func (db *DB) ListItemsByCrate(crateID int) ([]Item, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, path, kind, fragment_names FROM items WHERE crate_id = ? ORDER BY path`,
+		crateID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []Item
+	for rows.Next() {
+		var it Item
+		it.CrateID = crateID
+		if err := rows.Scan(&it.ID, &it.Path, &it.Kind, &it.FragmentNames); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, nil
+}
+
 // GetItemForHash picks a representative item for a content hash.
 // When crateIDs are specified, it prefers items from those crates.
 func (db *DB) GetItemForHash(contentHash string, crateIDs []int) (*Item, error) {

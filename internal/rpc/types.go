@@ -68,6 +68,25 @@ type GetDocResponse struct {
 	Markdown string `json:"markdown"`
 }
 
+// ListURIsRequest is the request body for POST /list-uris.
+type ListURIsRequest struct {
+	Crate   string `json:"crate"`
+	Version string `json:"version,omitempty"`
+}
+
+// ListURIsResponse is the response body for POST /list-uris.
+type ListURIsResponse struct {
+	Crate   string    `json:"crate"`
+	Version string    `json:"version"`
+	Items   []URIItem `json:"items"`
+}
+
+type URIItem struct {
+	URI       string   `json:"uri"`
+	Kind      string   `json:"kind"`
+	Fragments []string `json:"fragments,omitempty"`
+}
+
 // SearchCratesRequest is the request body for POST /search-crates.
 type SearchCratesRequest struct {
 	Query string `json:"query"`

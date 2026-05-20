@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jcdickinson/ferrisfetch/internal/docs"
 	"github.com/jcdickinson/ferrisfetch/internal/rpc"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +29,12 @@ func init() {
 }
 
 func runGet(cmd *cobra.Command, args []string) {
-	uri := strings.TrimPrefix(args[0], "rsdoc://")
+	input := args[0]
+	// Accept docs.rs URLs by rewriting them to rsdoc:// form first.
+	if rewritten := docs.DocsRsURLToRsdocURI(input); rewritten != "" {
+		input = rewritten
+	}
+	uri := strings.TrimPrefix(input, "rsdoc://")
 
 	// Support crate@version/path as alternative to crate/version/path
 	var crate, version, path string

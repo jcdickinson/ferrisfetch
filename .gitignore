@@ -8,6 +8,7 @@ claude.justfile
 
 # Go binaries
 /ferrisfetch
+/rsdoc
 *.exe
 *.dll
 *.so

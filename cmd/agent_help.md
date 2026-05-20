@@ -59,6 +59,15 @@ rsdoc get tokio/1.44.2/tokio::spawn
 rsdoc get serde/1.0.219/serde::Serialize%implementations
 ```
 
+### `rsdoc uris <crate[@version]>`
+
+List every `rsdoc://` URI in a crate, one per line, with the item kind. Useful when a `rsdoc get` lookup failed and you want to see the canonical paths, or when you have an item name in mind but aren't sure how to spell its URI. Auto-fetches the crate if not indexed. Pipe to `grep` to narrow.
+
+```
+rsdoc uris serde | grep Serialize
+rsdoc uris tokio@1.44.2
+```
+
 ### `rsdoc info <crate[@version]>`
 
 Show crate metadata from crates.io (license, MSRV, downloads, links, keywords). No daemon needed.
@@ -85,3 +94,15 @@ rsdoc which serde --with serde_derive@1.0 --newer-than 1.0.100
 ## URIs
 
 Search results return `rsdoc://` URIs (e.g. `rsdoc://serde/1.0.219/serde::Serialize`). Read these with `rsdoc get` — the `rsdoc://` prefix can be omitted. Fragment suffixes like `%fields`, `%variants`, and `%implementations` return specific sections of an item's documentation. Use `%` as the fragment separator, even if you are provided a link with `#`.
+
+The canonical path segment is the Rust path (`::` separated) starting with the **lib name** (underscored), not a docs.rs URL path. For example, `https://docs.rs/openrouter-rs/0.9.0/openrouter_rs/types/stream/enum.StreamEvent.html` is `rsdoc://openrouter-rs/0.9.0/openrouter_rs::types::stream::StreamEvent` — note the underscore in `openrouter_rs`, the `::` separators, and no `enum.` prefix.
+
+`rsdoc get` is lenient: it also accepts docs.rs-style paths (slashes, `kind.Name` prefixes, missing lib name) and full `https://docs.rs/...` URLs, resolving them to the canonical item. All of these work for the same item:
+
+```
+rsdoc get openrouter-rs/0.9.0/openrouter_rs::types::stream::StreamEvent
+rsdoc get openrouter-rs/0.9.0/types/stream/enum.StreamEvent
+rsdoc get https://docs.rs/openrouter-rs/0.9.0/openrouter_rs/types/stream/enum.StreamEvent.html
+```
+
+If a lookup still fails — usually because the bare item name is ambiguous across modules — run `rsdoc uris <crate> | grep <name>` to see canonical paths.

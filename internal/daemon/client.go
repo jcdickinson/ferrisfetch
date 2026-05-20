@@ -154,6 +154,12 @@ func (c *Client) GetDoc(ctx context.Context, req rpc.GetDocRequest) (*rpc.GetDoc
 	return &resp, err
 }
 
+func (c *Client) ListURIs(ctx context.Context, req rpc.ListURIsRequest) (*rpc.ListURIsResponse, error) {
+	var resp rpc.ListURIsResponse
+	err := c.post(ctx, "/list-uris", req, &resp)
+	return &resp, err
+}
+
 func (c *Client) Status(ctx context.Context) (*rpc.StatusResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://unix/status", nil)
 	if err != nil {
