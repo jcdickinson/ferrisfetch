@@ -104,7 +104,7 @@ func runSearch(cmd *cobra.Command, args []string) {
 	}
 
 	for i, r := range resp.Results {
-		fmt.Printf("%d. [%.2f] %s (%s) — %s@%s\n", i+1, r.Score, r.Path, r.Kind, r.CrateName, r.CrateVersion)
+		fmt.Printf("%d. [%.2f] (%s) %s\n", i+1, r.Score, r.Kind, r.URI)
 		if r.Snippet != "" {
 			fmt.Printf("   %s\n", r.Snippet)
 		}

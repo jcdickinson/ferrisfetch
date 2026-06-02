@@ -126,20 +126,30 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 	}
 
 	var results []rpc.DocResult
+	seen := make(map[string]bool)
+	appendResult := func(item *db.Item, score float32) {
+		res := buildResult(item, score)
+		if seen[res.URI] {
+			return
+		}
+		seen[res.URI] = true
+		results = append(results, res)
+	}
+
 	if len(reranked) > 0 {
 		for _, rr := range reranked {
 			if rr.OriginalIndex >= len(resolved) {
 				continue
 			}
 			r := resolved[rr.OriginalIndex]
-			results = append(results, buildResult(r.item, rr.RelevanceScore))
+			appendResult(r.item, rr.RelevanceScore)
 		}
 	} else {
-		for i, r := range resolved {
-			if i >= limit {
+		for _, r := range resolved {
+			if len(results) >= limit {
 				break
 			}
-			results = append(results, buildResult(r.item, r.score))
+			appendResult(r.item, r.score)
 		}
 	}
 
