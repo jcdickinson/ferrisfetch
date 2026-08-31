@@ -4,6 +4,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -198,6 +200,38 @@ func TestGetCratesForItems(t *testing.T) {
 			t.Fatalf("expected 2 results, got %d", len(result))
 		}
 	})
+}
+
+func TestGetCrateIDs(t *testing.T) {
+	db := testDB(t)
+
+	v1, err := db.UpsertCrate("mycrate", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := db.UpsertCrate("mycrate", "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := db.GetCrateIDs([]string{"mycrate"}, map[string]string{"mycrate": "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ids, []int{v1.ID}) {
+		t.Errorf("versioned IDs = %v, want [%d]", ids, v1.ID)
+	}
+
+	ids, err = db.GetCrateIDs([]string{"mycrate"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Ints(ids)
+	want := []int{v1.ID, v2.ID}
+	sort.Ints(want)
+	if !reflect.DeepEqual(ids, want) {
+		t.Errorf("unversioned IDs = %v, want %v", ids, want)
+	}
 }
 
 func TestResolveReexport(t *testing.T) {

@@ -31,7 +31,7 @@ func NewSearcher(database *db.DB, voyage *embeddings.VoyageClient, model, rerank
 
 // Search performs vector search with reranking.
 // Operates on content hashes to deduplicate across crate versions.
-func (s *Searcher) Search(query string, crateNames []string, threshold float32, limit int, rerankInstruction string) ([]rpc.DocResult, error) {
+func (s *Searcher) Search(query string, crateNames []string, crateVersions map[string]string, threshold float32, limit int, rerankInstruction string) ([]rpc.DocResult, error) {
 	slog.Info("search", "query", query, "threshold", threshold, "limit", limit, "crates", crateNames, "model", s.model)
 
 	queryEmb, err := s.voyage.EmbedSingle(query, s.model)
@@ -42,7 +42,7 @@ func (s *Searcher) Search(query string, crateNames []string, threshold float32, 
 
 	var crateIDs []int
 	if len(crateNames) > 0 {
-		crateIDs, err = s.db.GetCrateIDsByNames(crateNames)
+		crateIDs, err = s.db.GetCrateIDs(crateNames, crateVersions)
 		if err != nil {
 			return nil, fmt.Errorf("resolving crate names: %w", err)
 		}

@@ -76,6 +76,7 @@ These tools are intended to be used in the same way that MCPs are. stderr is for
 rsdoc add serde tokio            # Index crates (latest version)
 rsdoc add tokio@1.44.2           # Index a specific version
 rsdoc search "async runtime"     # Semantic search
+rsdoc search tokio@1.44.2 "spawn task" # Search one crate version
 rsdoc search-crates serde        # Search crates.io
 rsdoc get serde/latest/serde::Serialize  # Read a doc item (rsdoc:// prefix optional)
 rsdoc status                     # Show indexed crates

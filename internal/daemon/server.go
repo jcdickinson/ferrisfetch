@@ -597,26 +597,33 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-fetch any requested crates that aren't indexed yet.
-	if len(req.Crates) > 0 {
-		indexed, err := s.db.GetIndexedVersions(req.Crates)
-		if err != nil {
-			slog.Error("failed to check indexed versions", "error", err)
+	for _, name := range req.Crates {
+		version := req.CrateVersions[name]
+		var crate *db.Crate
+		var err error
+		if version == "" {
+			crate, err = s.db.GetLatestCrate(name)
 		} else {
-			for _, name := range req.Crates {
-				if _, ok := indexed[name]; !ok {
-					slog.Info("auto-fetching unindexed crate", "crate", name)
-					result := s.addCrate(rpc.CrateSpec{Name: name}, func(msg string) {
-						slog.Info(msg, "source", "auto-fetch")
-					})
-					if result.Error != "" {
-						slog.Error("auto-fetch failed", "crate", name, "error", result.Error)
-					}
-				}
-			}
+			crate, err = s.db.GetCrate(name, version)
+		}
+		if err != nil {
+			slog.Error("failed to check indexed crate", "crate", name, "version", version, "error", err)
+			continue
+		}
+		if crate != nil && crate.ProcessedAt != nil {
+			continue
+		}
+
+		slog.Info("auto-fetching unindexed crate", "crate", name, "version", version)
+		result := s.addCrate(rpc.CrateSpec{Name: name, Version: version}, func(msg string) {
+			slog.Info(msg, "source", "auto-fetch")
+		})
+		if result.Error != "" {
+			slog.Error("auto-fetch failed", "crate", name, "version", version, "error", result.Error)
 		}
 	}
 
-	results, err := s.searcher.Search(req.Query, req.Crates, req.Threshold, req.Limit, req.RerankInstruction)
+	results, err := s.searcher.Search(req.Query, req.Crates, req.CrateVersions, req.Threshold, req.Limit, req.RerankInstruction)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

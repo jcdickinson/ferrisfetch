@@ -32,11 +32,12 @@ type ProgressLine struct {
 
 // SearchRequest is the request body for POST /search.
 type SearchRequest struct {
-	Query             string   `json:"query"`
-	Crates            []string `json:"crates,omitempty"`
-	Threshold         float32  `json:"threshold,omitempty"`
-	Limit             int      `json:"limit,omitempty"`
-	RerankInstruction string   `json:"rerank_instruction,omitempty"`
+	Query             string            `json:"query"`
+	Crates            []string          `json:"crates,omitempty"`
+	CrateVersions     map[string]string `json:"crate_versions,omitempty"`
+	Threshold         float32           `json:"threshold,omitempty"`
+	Limit             int               `json:"limit,omitempty"`
+	RerankInstruction string            `json:"rerank_instruction,omitempty"`
 }
 
 // SearchResponse is the response body for POST /search.

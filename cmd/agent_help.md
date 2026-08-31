@@ -32,12 +32,13 @@ rsdoc add tokio@1.44.2
 rsdoc add serde@1.0 tokio@1.0
 ```
 
-### `rsdoc search <query>`
+### `rsdoc search [crate[@version]] <query>`
 
 Semantic search across indexed documentation. Returns `rsdoc://` URIs. Use `--crate` to filter; omit to search everything indexed.
 
 ```
 rsdoc search "serialize a struct to JSON"
+rsdoc search bevy_image@0.19.0 "ImageSampler linear ImageSamplerDescriptor"
 rsdoc search --crate serde "derive macro"
 ```
 

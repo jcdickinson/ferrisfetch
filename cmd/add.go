@@ -62,12 +62,13 @@ func runAdd(cmd *cobra.Command, args []string) {
 }
 
 var searchCmd = &cobra.Command{
-	Use:   "search <query>",
+	Use:   "search [crate[@version]] <query>",
 	Short: "Search indexed crate documentation",
 	Example: `  rsdoc search "serialize a struct to JSON"
+  rsdoc search bevy_image@0.19.0 "ImageSampler linear ImageSamplerDescriptor"
   rsdoc search --crate serde "derive macro"
   rsdoc search --limit 5 "async runtime"`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.RangeArgs(1, 2),
 	Run:  runSearch,
 }
 
@@ -77,7 +78,7 @@ var (
 )
 
 func init() {
-	searchCmd.Flags().StringSliceVar(&searchCrates, "crate", nil, "filter to specific crates (repeatable)")
+	searchCmd.Flags().StringSliceVar(&searchCrates, "crate", nil, "filter to specific crate[@version] values (repeatable)")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 10, "max results")
 }
 
@@ -88,11 +89,7 @@ func runSearch(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	resp, err := client.Search(context.Background(), rpc.SearchRequest{
-		Query:  args[0],
-		Crates: searchCrates,
-		Limit:  searchLimit,
-	})
+	resp, err := client.Search(context.Background(), newSearchRequest(args, searchCrates, searchLimit))
 	if err != nil {
 		slog.Error("search failed", "error", err)
 		os.Exit(1)
@@ -109,6 +106,26 @@ func runSearch(cmd *cobra.Command, args []string) {
 			fmt.Printf("   %s\n", r.Snippet)
 		}
 	}
+}
+
+func newSearchRequest(args, filters []string, limit int) rpc.SearchRequest {
+	query := args[len(args)-1]
+	if len(args) == 2 {
+		filters = append(append([]string(nil), filters...), args[0])
+	}
+
+	request := rpc.SearchRequest{Query: query, Limit: limit}
+	for _, filter := range filters {
+		name, version := parseCrateArg(filter)
+		request.Crates = append(request.Crates, name)
+		if version != "" && version != "latest" {
+			if request.CrateVersions == nil {
+				request.CrateVersions = make(map[string]string)
+			}
+			request.CrateVersions[name] = version
+		}
+	}
+	return request
 }
 
 var statusCmd = &cobra.Command{

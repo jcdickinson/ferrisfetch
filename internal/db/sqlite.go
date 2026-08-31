@@ -610,6 +610,33 @@ func (db *DB) GetCrateIDsByNames(names []string) ([]int, error) {
 	return ids, nil
 }
 
+// GetCrateIDs returns IDs for crate names, using exact versions where provided.
+func (db *DB) GetCrateIDs(names []string, versions map[string]string) ([]int, error) {
+	var unversioned []string
+	var ids []int
+	for _, name := range names {
+		version := versions[name]
+		if version == "" {
+			unversioned = append(unversioned, name)
+			continue
+		}
+
+		crate, err := db.GetCrate(name, version)
+		if err != nil {
+			return nil, err
+		}
+		if crate != nil {
+			ids = append(ids, crate.ID)
+		}
+	}
+
+	unversionedIDs, err := db.GetCrateIDsByNames(unversioned)
+	if err != nil {
+		return nil, err
+	}
+	return append(ids, unversionedIDs...), nil
+}
+
 // GetIndexedVersions returns name->version for processed crates matching the given names.
 // If multiple versions exist for the same name, the one with the latest processed_at wins.
 func (db *DB) GetIndexedVersions(names []string) (map[string]string, error) {
